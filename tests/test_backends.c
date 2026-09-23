@@ -20,7 +20,8 @@ static size_t case_length, source_offset, output_offset;
 static unsigned int case_flags;
 static int case_in_place;
 
-enum { ALIGNMENTS = 64, MAX_INPUT = 2048, GUARD_SIZE = 32 };
+/* Keep the test limit distinct from the POSIX MAX_INPUT macro. */
+enum { ALIGNMENTS = 64, SIMDURL_TEST_MAX_INPUT = 2048, GUARD_SIZE = 32 };
 
 static void check(int condition, const char *expression, int line)
 {
@@ -266,7 +267,7 @@ static void test_encoder(encode_backend backend, const char *name)
   static const char literal[] = "aZ09-._";
   static const char mixed[] = "aZ09-._~* +%/\x80\xff";
   static const size_t boundaries[] = { 31, 32, 33, 63, 64, 65, 127, 128, 129 };
-  char input[MAX_INPUT];
+  char input[SIMDURL_TEST_MAX_INPUT];
   uint32_t seed = UINT32_C(0x35dabc97);
   unsigned int flags, byte, position, trial;
   size_t length, i, source, destination, boundary;
@@ -336,7 +337,7 @@ static void test_decoder(decode_backend backend, const char *name)
   static const char safe_mixed[] = "%41+%2B%20%aF%FF%g0%0G%%a";
   static const size_t boundaries[] = { 31, 32, 33, 63, 64, 65, 127, 128, 129 };
   static const char alphabet[] = "0123456789ABCDEF";
-  char input[MAX_INPUT];
+  char input[SIMDURL_TEST_MAX_INPUT];
   uint32_t seed = UINT32_C(0x37d98a45);
   unsigned int flags, byte, trial;
   size_t length, position, token, i, source, destination, boundary;

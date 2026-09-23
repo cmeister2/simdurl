@@ -31,7 +31,10 @@
 #include <windows.h>
 #endif
 
-enum { MAX_INPUT = 8193, ALIGNMENTS = 64, REDZONE = 64, PATTERNS = 8 };
+/* POSIX system headers can define MAX_INPUT for terminal input limits. */
+enum {
+  SIMDURL_TEST_MAX_INPUT = 8193, ALIGNMENTS = 64, REDZONE = 64, PATTERNS = 8
+};
 static unsigned long assertions, cases;
 static int extended;
 static const char *phase = "initialization", *operation = "allocation";
@@ -219,9 +222,9 @@ static void buffered_case(const unsigned char *source, size_t length,
                            expectation expected,
                            const unsigned char *expected_bytes)
 {
-  unsigned char input[MAX_INPUT + ALIGNMENTS + 2 * REDZONE];
-  unsigned char output[3 * MAX_INPUT + ALIGNMENTS + 2 * REDZONE + 1];
-  unsigned char before[MAX_INPUT + ALIGNMENTS + 2 * REDZONE + 1];
+  unsigned char input[SIMDURL_TEST_MAX_INPUT + ALIGNMENTS + 2 * REDZONE];
+  unsigned char output[3 * SIMDURL_TEST_MAX_INPUT + ALIGNMENTS + 2 * REDZONE + 1];
+  unsigned char before[SIMDURL_TEST_MAX_INPUT + ALIGNMENTS + 2 * REDZONE + 1];
   size_t in_start = REDZONE + in_offset;
   size_t out_start = REDZONE + out_offset;
   size_t input_size = in_start + length + REDZONE;
@@ -232,12 +235,12 @@ static void buffered_case(const unsigned char *source, size_t length,
   input_offset = in_offset;
   output_offset = out_offset;
   case_in_place = in_place;
-  CHECK(length <= MAX_INPUT && in_offset < ALIGNMENTS && out_offset < ALIGNMENTS);
+  CHECK(length <= SIMDURL_TEST_MAX_INPUT && in_offset < ALIGNMENTS && out_offset < ALIGNMENTS);
   memset(input, 0xa5, input_size);
   memcpy(input + in_start, source, length);
   if(in_place) {
     size_t span = length > capacity ? length : capacity;
-    CHECK(!encode && capacity <= MAX_INPUT + 1);
+    CHECK(!encode && capacity <= SIMDURL_TEST_MAX_INPUT + 1);
     input_size = in_start + span + REDZONE;
     /* Keep actual input untouched while initializing possible extra capacity. */
     memset(input + in_start + length, 0xa5, span - length + REDZONE);
@@ -506,10 +509,10 @@ static unsigned char *place(guarded_region *region, size_t span, int trailing)
 
 static void test_guard_pages(void)
 {
-  guarded_region in = new_region(MAX_INPUT + 1);
-  guarded_region out = new_region(3 * MAX_INPUT + 1);
-  unsigned char source[MAX_INPUT], expected_bytes[3 * MAX_INPUT];
-  unsigned char before[MAX_INPUT + 1];
+  guarded_region in = new_region(SIMDURL_TEST_MAX_INPUT + 1);
+  guarded_region out = new_region(3 * SIMDURL_TEST_MAX_INPUT + 1);
+  unsigned char source[SIMDURL_TEST_MAX_INPUT], expected_bytes[3 * SIMDURL_TEST_MAX_INPUT];
+  unsigned char before[SIMDURL_TEST_MAX_INPUT + 1];
   size_t lengths[280], length_count = 0, l, i, count, choices[16];
   unsigned int p, flags;
   int a, b, encode;
@@ -540,12 +543,12 @@ static void test_guard_pages(void)
   lengths[length_count++] = 1023;
   lengths[length_count++] = 1024;
   lengths[length_count++] = 1025;
-  if(in.page_size <= MAX_INPUT) {
+  if(in.page_size <= SIMDURL_TEST_MAX_INPUT) {
     lengths[length_count++] = in.page_size - 1;
     lengths[length_count++] = in.page_size;
-    if(in.page_size < MAX_INPUT) lengths[length_count++] = in.page_size + 1;
+    if(in.page_size < SIMDURL_TEST_MAX_INPUT) lengths[length_count++] = in.page_size + 1;
   }
-  lengths[length_count++] = MAX_INPUT;
+  lengths[length_count++] = SIMDURL_TEST_MAX_INPUT;
   for(l = 0; l < length_count; ++l) {
     size_t length = lengths[l];
     for(p = 0; p < PATTERNS; ++p) {
