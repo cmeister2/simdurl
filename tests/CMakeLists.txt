@@ -15,7 +15,12 @@ function(simdurl_add_test target library)
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
   endif()
-  add_test(NAME ${target} COMMAND ${target})
+  if(test_source STREQUAL "test_memory.c" AND SIMDURL_TEST_EXTENDED)
+    add_test(NAME ${target} COMMAND ${target} --extended)
+  else()
+    add_test(NAME ${target} COMMAND ${target})
+  endif()
+  set_tests_properties(${target} PROPERTIES TIMEOUT 180 LABELS "core")
 endfunction()
 
 simdurl_add_test(simdurl_test simdurl::simdurl)
@@ -28,6 +33,15 @@ simdurl_add_test(simdurl_test_scanner_header_only simdurl::header_only test_scan
 simdurl_add_test(simdurl_test_scanner_scalar simdurl::header_only test_scanner.c)
 target_compile_definitions(simdurl_test_scanner_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
 
+foreach(suite IN ITEMS contract memory)
+  simdurl_add_test(simdurl_test_${suite} simdurl::simdurl test_${suite}.c)
+  simdurl_add_test(simdurl_test_${suite}_header_only simdurl::header_only test_${suite}.c)
+  simdurl_add_test(simdurl_test_${suite}_scalar simdurl::header_only test_${suite}.c)
+  target_compile_definitions(simdurl_test_${suite}_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
+  set_tests_properties(simdurl_test_${suite} simdurl_test_${suite}_header_only
+    simdurl_test_${suite}_scalar PROPERTIES LABELS "core;${suite}")
+endforeach()
+
 add_executable(simdurl_test_backends test_backends.c)
 target_link_libraries(simdurl_test_backends PRIVATE simdurl::header_only)
 set_target_properties(simdurl_test_backends PROPERTIES
@@ -38,6 +52,22 @@ else()
   target_compile_options(simdurl_test_backends PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME simdurl_test_backends COMMAND simdurl_test_backends)
+set_tests_properties(simdurl_test_backends PROPERTIES TIMEOUT 180 LABELS "core;backends")
+if(SIMDURL_TEST_REQUIRE_BACKEND)
+  if(NOT SIMDURL_TEST_REQUIRE_BACKEND MATCHES "^(portable|sse2|avx2|vbmi2)$")
+    message(FATAL_ERROR "Unknown SIMDURL_TEST_REQUIRE_BACKEND: ${SIMDURL_TEST_REQUIRE_BACKEND}")
+  endif()
+  if(NOT SIMDURL_TEST_REQUIRE_BACKEND STREQUAL "sse2")
+    add_test(NAME simdurl_required_codec_backend
+      COMMAND simdurl_test_backends "--require=${SIMDURL_TEST_REQUIRE_BACKEND}")
+    set_tests_properties(simdurl_required_codec_backend PROPERTIES TIMEOUT 180 LABELS "backends")
+  endif()
+  if(NOT SIMDURL_TEST_REQUIRE_BACKEND STREQUAL "vbmi2")
+    add_test(NAME simdurl_required_scanner_backend
+      COMMAND simdurl_test_scanner_header_only "--require=${SIMDURL_TEST_REQUIRE_BACKEND}")
+    set_tests_properties(simdurl_required_scanner_backend PROPERTIES TIMEOUT 180 LABELS "backends")
+  endif()
+endif()
 
 foreach(mode IN ITEMS library header_only)
   add_executable(simdurl_test_cpp_${mode} cpp_main.cpp cpp_other.cpp)
@@ -49,10 +79,54 @@ foreach(mode IN ITEMS library header_only)
     target_link_libraries(simdurl_test_cpp_${mode} PRIVATE simdurl::header_only)
   endif()
   add_test(NAME simdurl_test_cpp_${mode} COMMAND simdurl_test_cpp_${mode})
+  add_executable(simdurl_test_cpp_semantics_${mode} test_simdurl_cpp.cpp)
+  if(mode STREQUAL "library")
+    target_link_libraries(simdurl_test_cpp_semantics_${mode} PRIVATE simdurl::simdurl)
+  else()
+    target_link_libraries(simdurl_test_cpp_semantics_${mode} PRIVATE simdurl::header_only)
+  endif()
+endforeach()
+
+# Compile the implementation as C++ in exactly one TU, with normal declarations
+# in both semantic tests and a separate two-TU consumer.
+add_library(simdurl_test_cpp_implementation OBJECT cpp_implementation.cpp)
+target_include_directories(simdurl_test_cpp_implementation PRIVATE "${PROJECT_SOURCE_DIR}/include")
+set_target_properties(simdurl_test_cpp_implementation PROPERTIES
+  CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+if(SIMDURL_DISABLE_SIMD)
+  target_compile_definitions(simdurl_test_cpp_implementation PRIVATE SIMDURL_DISABLE_SIMD)
+endif()
+if(SIMDURL_NATIVE)
+  target_compile_options(simdurl_test_cpp_implementation PRIVATE "${SIMDURL_NATIVE_FLAG}")
+endif()
+add_executable(simdurl_test_cpp_semantics_implementation test_simdurl_cpp.cpp
+  $<TARGET_OBJECTS:simdurl_test_cpp_implementation>)
+target_include_directories(simdurl_test_cpp_semantics_implementation PRIVATE "${PROJECT_SOURCE_DIR}/include")
+add_executable(simdurl_test_cpp_single_tu cpp_main.cpp cpp_other.cpp
+  $<TARGET_OBJECTS:simdurl_test_cpp_implementation>)
+target_include_directories(simdurl_test_cpp_single_tu PRIVATE "${PROJECT_SOURCE_DIR}/include")
+set_target_properties(simdurl_test_cpp_single_tu PROPERTIES
+  CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+add_test(NAME simdurl_test_cpp_single_tu COMMAND simdurl_test_cpp_single_tu)
+foreach(mode IN ITEMS library header_only implementation)
+  set(target simdurl_test_cpp_semantics_${mode})
+  set_target_properties(${target} PROPERTIES
+    CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+  if(UNIX)
+    target_compile_definitions(${target} PRIVATE SIMDURL_TEST_POSIX=1)
+  endif()
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ${target} COMMAND ${target})
+  set_tests_properties(${target} PROPERTIES TIMEOUT 180 LABELS "core;cpp")
 endforeach()
 
 if((WIN32 OR CYGWIN) AND BUILD_SHARED_LIBS)
-  foreach(target IN ITEMS simdurl_test simdurl_test_scanner simdurl_test_cpp_library)
+  foreach(target IN ITEMS simdurl_test simdurl_test_scanner simdurl_test_contract
+      simdurl_test_memory simdurl_test_cpp_library simdurl_test_cpp_semantics_library)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:simdurl> $<TARGET_FILE_DIR:${target}>

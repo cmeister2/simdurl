@@ -100,6 +100,8 @@ SIMDURL_API simdurl_result simdurl_encode(const char *input, size_t input_length
  * On success, written is the number of output bytes. On any error, written is
  * zero and output may be partially modified. Bytes after written but within
  * output_capacity may be modified by vector stores. No writes exceed capacity.
+ * If decoded input is forbidden and output capacity is also insufficient,
+ * either REJECTED or BUFFER_TOO_SMALL may be returned.
  * Exact output capacities work; worst-case capacity enables the SIMD path.
  */
 SIMDURL_API simdurl_result simdurl_decode(const char *input, size_t input_length,

@@ -34,7 +34,8 @@
 typedef simdurl_status (*validate_function)(const char *, size_t, unsigned int);
 
 /* Keep assertions active in Release builds. */
-static unsigned long assertions;
+static unsigned long assertions, backend_cases;
+static validate_function current_validate;
 static const char *context = "initialization";
 static const char *backend_name = "public API";
 static size_t case_length, case_offset;
@@ -333,10 +334,20 @@ static void test_guard_pages(validate_function validate, int public_api)
 }
 #endif
 
-static void test_scanner(validate_function validate, const char *name,
+static simdurl_status counted_validate(const char *input, size_t length,
+                                        unsigned int flags)
+{
+  ++backend_cases;
+  return current_validate(input, length, flags);
+}
+
+static void test_scanner(validate_function implementation, const char *name,
                          int public_api)
 {
+  validate_function validate = counted_validate;
   backend_name = name;
+  current_validate = implementation;
+  backend_cases = 0;
   test_all_bytes(validate);
   test_boundaries(validate);
   test_exact_allocations(validate);
@@ -346,21 +357,73 @@ static void test_scanner(validate_function validate, const char *name,
 #else
   (void)public_api;
 #endif
-  printf("%s scanner passed\n", name);
+  printf("SIMDURL_BACKEND operation=scan backend=%s compiled=1 executed=1 "
+         "skipped=0 cases=%lu\n", name, backend_cases);
+#if defined(SIMDURL_TEST_POSIX) || defined(_WIN32)
+  printf("SIMDURL_MEMORY operation=scan backend=%s guard_pages=executed\n", name);
+#else
+  printf("SIMDURL_MEMORY operation=scan backend=%s guard_pages=unavailable\n", name);
+#endif
 }
 
-int main(void)
+static void report_skipped(const char *name, int compiled)
 {
+  printf("SIMDURL_BACKEND operation=scan backend=%s compiled=%d executed=0 "
+         "skipped=1 cases=0 reason=%s\n", name, compiled,
+         compiled ? "cpu_unsupported" : "not_compiled");
+}
+
+int main(int argc, char **argv)
+{
+  unsigned int required = 0, available = 0;
+  int arg, portable = 0, compiled_x86 = 0, avx2 = 0;
+  for(arg = 1; arg < argc; ++arg) {
+    if(strcmp(argv[arg], "--require=portable") == 0)
+      required |= 1;
+    else if(strcmp(argv[arg], "--require=sse2") == 0)
+      required |= 2;
+    else if(strcmp(argv[arg], "--require=avx2") == 0)
+      required |= 4;
+    else {
+      fprintf(stderr, "Usage: %s [--require=portable] [--require=sse2] "
+              "[--require=avx2]\n", argv[0]);
+      return EXIT_FAILURE;
+    }
+  }
   test_contract();
-  test_scanner(simdurl_validate_bytes, "public API", 1);
+  test_scanner(simdurl_validate_bytes, "public", 1);
 #if defined(SIMDURL_HEADER_ONLY)
+  portable = 1;
+  available |= 1;
   test_scanner(validate_portable, "portable", 0);
 #ifdef SIMDURL_DETAIL_X86
-  test_scanner(validate_sse2, "SSE2", 0);
-  if(simdurl_detail_has_avx2())
-    test_scanner(validate_avx2, "AVX2", 0);
+  compiled_x86 = 1;
+  available |= 2;
+  test_scanner(validate_sse2, "sse2", 0);
+  avx2 = simdurl_detail_has_avx2();
+  if(avx2) {
+    available |= 4;
+    test_scanner(validate_avx2, "avx2", 0);
+  }
 #endif
 #endif
+  if(!portable)
+    report_skipped("portable", 0);
+  if(!compiled_x86)
+    report_skipped("sse2", 0);
+  if(!avx2)
+    report_skipped("avx2", compiled_x86);
+  if(required & ~available) {
+    fprintf(stderr, "Required scanner backend did not execute:");
+    if((required & 1) && !(available & 1))
+      fputs(" portable", stderr);
+    if((required & 2) && !(available & 2))
+      fputs(" sse2", stderr);
+    if((required & 4) && !(available & 4))
+      fputs(" avx2", stderr);
+    fputc('\n', stderr);
+    return EXIT_FAILURE;
+  }
   printf("simdurl scanner: %lu checks passed\n", assertions);
   return EXIT_SUCCESS;
 }
