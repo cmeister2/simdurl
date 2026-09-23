@@ -68,7 +68,7 @@ simdurl_detail_decode_tail(const char *input, size_t remaining, char *output,
         return simdurl_detail_result(SIMDURL_BUFFER_TOO_SMALL, 0);
       if(!simdurl_detail_literals_allowed(input, count, reject_limit))
         return simdurl_detail_result(SIMDURL_REJECTED, 0);
-      simdurl_detail_copy_literals(output, input, count);
+      memmove(output, input, count);
       output += count;
       input += count;
       remaining -= count;

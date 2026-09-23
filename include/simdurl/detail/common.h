@@ -60,8 +60,11 @@ SIMDURL_DETAIL_INLINE int simdurl_detail_unreserved(unsigned char c,
 
 SIMDURL_DETAIL_INLINE unsigned int simdurl_detail_hex(unsigned char c)
 {
-  /* Invalid bytes map to 16, so (high | low) < 16 validates both digits.
-   * A bounded byte lookup avoids data-dependent branches for each hex digit. */
+#if !defined(SIMDURL_DETAIL_X86)
+  /* A lookup speeds up percent-heavy portable-only decoding. Keep the
+   * arithmetic classifier in runtime-dispatch builds, where the lookup
+   * regressed form scanning. Invalid bytes map to 16 so (high | low) < 16
+   * still validates both digits. */
   static const unsigned char values[256] = {
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
@@ -81,39 +84,14 @@ SIMDURL_DETAIL_INLINE unsigned int simdurl_detail_hex(unsigned char c)
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16
   };
   return values[c];
-}
-
-/* Read both ends before storing: an in-place decoded span can overlap its
- * destination. Fixed-width copies cover only bytes within the literal span. */
-SIMDURL_DETAIL_INLINE void simdurl_detail_copy_literals(char *output,
-                                                       const char *input,
-                                                       size_t length)
-{
-  if(length == 1)
-    *output = *input;
-  else if(length > 16)
-    memmove(output, input, length);
-  else if(length >= 8) {
-    uint64_t first, last;
-    memcpy(&first, input, sizeof(first));
-    memcpy(&last, input + length - sizeof(last), sizeof(last));
-    memcpy(output, &first, sizeof(first));
-    memcpy(output + length - sizeof(last), &last, sizeof(last));
-  }
-  else if(length >= 4) {
-    uint32_t first, last;
-    memcpy(&first, input, sizeof(first));
-    memcpy(&last, input + length - sizeof(last), sizeof(last));
-    memcpy(output, &first, sizeof(first));
-    memcpy(output + length - sizeof(last), &last, sizeof(last));
-  }
-  else if(length >= 2) {
-    uint16_t first, last;
-    memcpy(&first, input, sizeof(first));
-    memcpy(&last, input + length - sizeof(last), sizeof(last));
-    memcpy(output, &first, sizeof(first));
-    memcpy(output + length - sizeof(last), &last, sizeof(last));
-  }
+#else
+  if(c >= '0' && c <= '9')
+    return (unsigned int)(c - '0');
+  c = (unsigned char)(c | 32);
+  if(c >= 'a' && c <= 'f')
+    return (unsigned int)(c - 'a' + 10);
+  return 256;
+#endif
 }
 
 /* Initialize *next_percent to the span start, then reuse it only while
