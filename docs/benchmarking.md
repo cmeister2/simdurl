@@ -66,8 +66,8 @@ omitted. Keeping these names retains their historical identity.
 | `codec/encode/URI/mixed/128` | Representative short URL encoding |
 | `codec/decode/form/mixed/128` | Representative percent/plus decoding |
 | `codec/encode/URI/literal/4096` | Literal scan/copy fast path |
-| `codec/encode/URI/dense/4096` | Bulk escape expansion and VBMI2 encoding |
-| `codec/decode/URI/dense/4096` | Bulk percent decoding and VBMI2 compression |
+| `codec/encode/URI/dense/4096` | Bulk escape expansion |
+| `codec/decode/URI/dense/4096` | Bulk percent decoding |
 | `formscan/form/plus_long/16384` | Repeated 256-byte literal runs between plus markers |
 | `validate/C0_DEL_SPACE/valid/4096` | Full-buffer scanning with control/DEL/space checks |
 | `helpers/ascii_copy/mixed_ascii/128/runtime` | Header/token lowercase conversion |
@@ -110,7 +110,15 @@ The selected case matrices must match the C filters.
 The hosted testbed is `intel-v1-gcc14-v1`. Use a new version when changing the
 compiler, flags, measurement method, or workload semantics so incompatible
 measurements do not share a trend line. Keep case names stable when the workload
-is unchanged. Hardware changes require a separate testbed or baseline.
+is unchanged.
+
+Bencher's published `intel-v1` specification does not guarantee VBMI2.
+Each job captures CPU features and the library's available encode/decode/validate
+and helper backends for full SIMD blocks. Helper AVX2 dispatch starts at 64 bytes;
+shorter inputs can use SSE2 or portable tails.
+The initial hosted run exposed AVX2 encoding/validation and the portable
+decoder, without VBMI2. Tracking the VBMI2 path requires a different capable
+testbed. Hardware changes require a separate testbed or baseline.
 
 ## Reading regressions and improvements
 
@@ -130,54 +138,6 @@ boundary coverage belong in tests, even when they are absent from the dashboard.
 Bencher supports [percentage thresholds](https://bencher.dev/docs/explanation/thresholds/)
 for alerts; configure them after collecting a stable baseline. Keep improvement
 review separate from regression alerts so expected speedups do not become failures.
-
-## Measuring native VBMI2
-
-The initial hosted run exposed AVX2 encoding/validation and the portable decoder,
-without VBMI2. Bencher's published
-[`intel-v1` specification](https://bencher.dev/docs/explanation/testbeds/) does not
-guarantee VBMI2. Each job captures CPU flags and available full-block backends in
-its evidence; check that evidence for the actual run.
-
-Use a fixed native machine whose CPU and OS expose the complete feature set
-required by `simdurl_detail_has_vbmi2()`. Run the same ten cases with the same
-container compiler and flags under a separate testbed. No extra benchmark names
-are needed. The bulk codec cases already reach VBMI2 on supported hardware;
-AVX2 handles the long validation/lowercase/hex cases. The 32-byte fixed hex case
-covers a shorter path (helper AVX2 dispatch starts at 64 bytes).
-
-Build the image as in Local verification, then require VBMI2 at execution time:
-
-```sh
-mkdir -p build-bencher/native-vbmi2
-docker run --rm --network none -e SIMDURL_BENCH_REQUIRE_VBMI2=1 \
-  simdurl-bencher:local > build-bencher/native-vbmi2/results.json \
-  2> build-bencher/native-vbmi2/evidence.json
-```
-
-The preflight exits unsuccessfully before emitting metrics if encode/decode
-would fall back. For a direct local probe, compile
-`benchmarks/bencher/backend_info.c` with `-DSIMDURL_HEADER_ONLY -Iinclude` and run
-it with `--require-vbmi2`. Unset or `0` leaves the container requirement disabled;
-values other than `0` and `1` are rejected.
-
-After a successful run, Bencher can
-[ingest the local JSON](https://bencher.dev/docs/how-to/track-custom-benchmarks/).
-For example, with `BENCHER_API_KEY` configured:
-
-```sh
-bencher run --project simdurl --branch main --hash "$(git rev-parse HEAD)" \
-  --testbed native-vbmi2-gcc14-v1 --adapter json \
-  --file build-bencher/native-vbmi2/results.json
-```
-
-Use a stable testbed name identifying your actual machine, and record the source
-SHA used to build the image. Archive the evidence alongside the report. Filter
-the dashboard by testbed to keep ten visible lines; two testbeds shown together
-produce twenty lines. Provisioning that native runner is separate from the hosted
-workflow. Intel SDE in CI verifies instruction-path correctness and must not supply
-performance measurements. ARM currently has a portable fallback, not an explicit
-NEON backend.
 
 ## Full diagnostic suite
 

@@ -280,7 +280,7 @@ regressions and gains from SIMD updates:
 | Form decode, mixed | 128 B | Percent escapes and `+` handling |
 | URI encode, literal | 4 KiB | Literal scan/copy fast path |
 | URI encode, dense escapes | 4 KiB | Bulk escape expansion |
-| URI decode, dense escapes | 4 KiB | Bulk percent decoding, including VBMI2 |
+| URI decode, dense escapes | 4 KiB | Bulk percent decoding |
 | Form decode, long runs between `+` | 16 KiB | Repeated literal scanning |
 | Validate controls/DEL/spaces, valid | 4 KiB | Full-buffer scanning |
 | ASCII lowercase copy, mixed | 128 B | Header/token conversion |
@@ -308,14 +308,8 @@ benchmark invocations also retain that full coverage; append an iteration count
 and `--core` to select the core cases for that executable. Portable builds disable
 explicit SIMD while allowing compiler vectorization and optimized libc routines.
 
-The recorded Bencher hosted run had AVX2 but no VBMI2, so its decoder used the
-portable path. Measure VBMI2 updates on native capable hardware and upload the
-same ten cases to a separate Bencher testbed. The container accepts
-`SIMDURL_BENCH_REQUIRE_VBMI2=1` to reject fallback runs. Intel SDE is useful for
-correctness checks, not native performance measurements.
-
 The [benchmarking guide](docs/benchmarking.md) covers historical results,
-interpreting regressions and improvements, native VBMI2 runs, and diagnostics.
+interpreting regressions and improvements, and diagnostics.
 
 ## Releases
 
