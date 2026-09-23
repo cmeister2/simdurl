@@ -73,7 +73,8 @@ ctest --test-dir build-required --verbose
 Accepted requirements are `portable`, `sse2`, `avx2`, and `vbmi2`. Portable
 applies to all operations; SSE2 to scanning; AVX2 to encoding/scanning; and
 VBMI2 to encoding/decoding. A required but uncompiled/unsupported backend
-fails the test. No requirement bypasses CPU feature checks. Runtime-dispatched
+fails the existing backend test; it does not add a second run of that suite.
+No requirement bypasses CPU feature checks. Runtime-dispatched
 public calls are tested separately by the main suites. Run a baseline binary on
 an older x86-64 CPU to validate the public fallback on that hardware; compiling
 with SIMD disabled is additional coverage, not equivalent dispatch evidence.
@@ -81,9 +82,11 @@ with SIMD disabled is additional coverage, not equivalent dispatch evidence.
 CI also runs the direct backend suite under Intel Software Development Emulator
 (SDE), using its Ice Lake model (`-icx`) and `--require=vbmi2`. This provides
 VBMI2 encoder and decoder execution even when the host CPU lacks those
-instructions. The job uses a pinned archive and verifies its SHA-256 checksum
-on downloads and cache hits. Its execution log is retained alongside the
-native backend records. Emulation validates instruction semantics and dispatch
+instructions. A commit-pinned [setup-sde action](https://github.com/petarpetrovt/setup-sde)
+provides its default SDE release, caching the archive and verifying SHA-256 on
+downloads and cache hits. The action owns the version, download location, and
+checksum together; Renovate updates its pin with the other GitHub Actions.
+Its execution log is retained alongside the native backend records. Emulation validates instruction semantics and dispatch
 under the emulated CPU features; it does not establish native performance or
 replace testing on hardware with those features.
 
@@ -99,9 +102,19 @@ ctest --test-dir build-asan --output-on-failure -E install_consumer
 
 The ordinary install-consumer test does not propagate instrumentation flags to
 external consumers, so run that test in the normal build. MemorySanitizer is a
-separate job: use the C targets and a toolchain/runtime setup compatible with
-MSan instrumentation and address-space mapping. Do not silence findings by
-broadly ignoring library code. The sanitizer suites also test portable paths;
+separate job: use a toolchain/runtime setup compatible with MSan instrumentation
+and address-space mapping, then build and run the C suites:
+
+```sh
+cmake --build build-msan --parallel --target simdurl_tests_c
+ctest --test-dir build-msan --output-on-failure --no-tests=error -L '^c$'
+```
+
+The aggregate and `c` label are assigned when C tests are registered, so new C
+suites join this selection automatically. C++ implementations and the external
+install consumers are excluded; the C caller that links a C++ implementation
+belongs to the C++ group too. Do not silence findings by broadly ignoring
+library code. The sanitizer suites also test portable paths;
 compiler-generated SIMD remains enabled unless explicitly disabled.
 
 ## Differential fuzzing
