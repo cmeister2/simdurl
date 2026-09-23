@@ -66,6 +66,11 @@ simdurl_add_test(simdurl_test_literal_complexity simdurl::header_only test_liter
 target_compile_definitions(simdurl_test_literal_complexity PRIVATE
   SIMDURL_DISABLE_SIMD=1 SIMDURL_TEST_COUNT_SCANS=1)
 
+simdurl_add_test(simdurl_test_helpers simdurl::simdurl test_helpers.c)
+simdurl_add_test(simdurl_test_helpers_header_only simdurl::header_only test_helpers.c)
+simdurl_add_test(simdurl_test_helpers_scalar simdurl::header_only test_helpers.c)
+target_compile_definitions(simdurl_test_helpers_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
+
 add_executable(simdurl_test_backends test_backends.c)
 target_link_libraries(simdurl_test_backends PRIVATE simdurl::header_only)
 set_target_properties(simdurl_test_backends PROPERTIES
@@ -154,7 +159,8 @@ endforeach()
 
 if((WIN32 OR CYGWIN) AND BUILD_SHARED_LIBS)
   foreach(target IN ITEMS simdurl_test simdurl_test_scanner simdurl_test_contract
-      simdurl_test_memory simdurl_test_literals simdurl_test_cpp_library simdurl_test_cpp_semantics_library)
+      simdurl_test_memory simdurl_test_literals simdurl_test_helpers
+      simdurl_test_cpp_library simdurl_test_cpp_semantics_library)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:simdurl> $<TARGET_FILE_DIR:${target}>
