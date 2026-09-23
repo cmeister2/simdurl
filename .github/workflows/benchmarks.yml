@@ -1,0 +1,139 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'First-parent commit SHA to start after (empty: only until)'
+        type: string
+        default: ''
+      until:
+        description: 'Last mainline commit SHA, inclusive (empty: current main)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# Keep earlier pushes queued, including their intermediate mainline commits.
+concurrency:
+  group: benchmarks-${{ github.ref }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  tooling:
+    name: Benchmark tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Check benchmark tooling
+        run: python3 -m unittest discover -s scripts -p 'test_benchmark*.py'
+      - name: Smoke-test the benchmark image without credentials
+        run: |
+          docker build --platform linux/amd64 --file benchmarks/bencher/Dockerfile \
+            --build-arg "SOURCE_SHA=$GITHUB_SHA" --tag simdurl-bencher:smoke .
+          docker run --rm --network none simdurl-bencher:smoke \
+            --codec-repeats 1 --codec-iterations 10000 --validation-iterations 10000 \
+            > "$RUNNER_TEMP/benchmark-smoke.json" 2> "$RUNNER_TEMP/benchmark-smoke.log" || {
+              cat "$RUNNER_TEMP/benchmark-smoke.log" >&2
+              exit 1
+            }
+
+  commits:
+    needs: tooling
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.commits.outputs.matrix }}
+      count: ${{ steps.commits.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select every new mainline commit
+        id: commits
+        env:
+          BEFORE: ${{ github.event_name == 'push' && github.event.before || inputs.since }}
+          AFTER: ${{ inputs.until || github.sha }}
+        run: |
+          matrix=$(python3 scripts/benchmark_commits.py --before "$BEFORE" --after "$AFTER" --main-head "$GITHUB_SHA")
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+          printf 'count=%s\n' "$(jq '.commit | length' <<< "$matrix")" >> "$GITHUB_OUTPUT"
+
+  benchmark:
+    needs: commits
+    if: needs.commits.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    environment: Benchmarking
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.commits.outputs.matrix) }}
+    env:
+      SOURCE_SHA: ${{ matrix.commit }}
+    steps:
+      - name: Check out the benchmark harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Check out the library revision under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ matrix.commit }}
+          path: source
+          persist-credentials: false
+      - name: Install Bencher
+        uses: bencherdev/bencher@8d75325c3bc59403a2186a056b472c4f49d42838 # v0.6.12
+        with:
+          version: 0.6.12
+      - name: Build the benchmark image
+        run: |
+          printf 'DOCKER_CONFIG=%s\n' "$RUNNER_TEMP/bencher-docker" >> "$GITHUB_ENV"
+          mkdir -p evidence "$RUNNER_TEMP/benchmark-context"
+          cp -R source/include harness/benchmarks harness/scripts "$RUNNER_TEMP/benchmark-context/"
+          image="registry.bencher.dev/simdurl:${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker build --platform linux/amd64 \
+            --file "$RUNNER_TEMP/benchmark-context/benchmarks/bencher/Dockerfile" \
+            --build-arg "SOURCE_SHA=$SOURCE_SHA" --tag "$image" "$RUNNER_TEMP/benchmark-context"
+          printf 'BENCHER_IMAGE=%s\n' "$image" >> "$GITHUB_ENV"
+          git -C harness rev-parse HEAD > evidence/harness-sha.txt
+      - name: Upload the image and run on Bencher hardware
+        env:
+          BENCHER_API_KEY: ${{ secrets.BENCHER_SECRET }}
+        run: |
+          test -n "$BENCHER_API_KEY"
+          printf '%s' "$BENCHER_API_KEY" | docker login registry.bencher.dev --username simdurl --password-stdin
+          docker push "$BENCHER_IMAGE"
+          image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$BENCHER_IMAGE")
+          printf '%s\n' "$image" > evidence/image.txt
+          status=0
+          bencher run --project simdurl --branch main --hash "$SOURCE_SHA" \
+            --testbed intel-v1-gcc14-v1 --spec intel-v1 --adapter json \
+            --image "$image" --job-timeout 300 --format json --quiet > evidence/report.json 2> >(tee evidence/bencher.log >&2) || status=$?
+          if job=$(jq -er '.job // empty' evidence/report.json); then
+            bencher job view simdurl "$job" > evidence/job.json || status=1
+          fi
+          test "$status" -eq 0
+          printf 'Bencher recorded commit `%s`. [Benchmark history](https://bencher.dev/perf/simdurl)\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove temporary registry credentials
+        if: always()
+        run: rm -rf "$DOCKER_CONFIG"
+      - name: Retain the report and raw measurement evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmarks-${{ matrix.commit }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: ignore
+          retention-days: 90
