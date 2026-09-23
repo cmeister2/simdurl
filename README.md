@@ -271,73 +271,45 @@ ARM, MSVC, and 32-bit builds use the portable fallback. Performance depends on C
 length, escape density, and compiler settings; measure on your deployment
 workload.
 
-Optional benchmarks compare the same header-only workload with runtime SIMD
-selection and with explicit SIMD disabled:
+The default benchmark suite tracks **ten cases** chosen to expose substantial
+regressions and gains from SIMD updates:
+
+| Benchmark | Input | What it tracks |
+| --- | --- | --- |
+| URI encode, mixed | 128 B | Typical escaped URL latency |
+| Form decode, mixed | 128 B | Percent escapes and `+` handling |
+| URI encode, literal | 4 KiB | Literal scan/copy fast path |
+| URI encode, dense escapes | 4 KiB | Bulk escape expansion |
+| URI decode, dense escapes | 4 KiB | Bulk percent decoding |
+| Form decode, long runs between `+` | 16 KiB | Repeated literal scanning |
+| Validate controls/DEL/spaces, valid | 4 KiB | Full-buffer scanning |
+| ASCII lowercase copy, mixed | 128 B | Header/token conversion |
+| Lowercase hex, fixed length | 32 B | Digest encoding and short-call overhead |
+| Lowercase hex, runtime length | 4 KiB | Bulk hex throughput |
+
+All ten use automatic CPU selection in header-only calls. Each reports median
+CPU nanoseconds per operation from five samples, with the observed range. Keep
+the cases separate: averaging them could hide an individual regression.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSIMDURL_BUILD_BENCHMARKS=ON
 cmake --build build --parallel
-./build/benchmarks/simdurl_bench
-./build/benchmarks/simdurl_bench_scalar
+python3 scripts/benchmark.py --bin-dir build/benchmarks --output-dir build/bench-core
 ```
 
-Pass an iteration count, such as `100`, for a quick smoke run. Each executable
-covers URI/form encoding/decoding, lengths 16/128/4096, and literal, mixed, and
-dense escape patterns. Matching checksums help verify equivalent output. Throughput
-is measured in input bytes per second.
+The output directory must be empty. The exporter writes Bencher JSON to stdout
+and retains the metrics, samples, raw output, and machine metadata there. CI
+publishes this same ten-case suite, retaining existing benchmark names.
 
-The byte scanner has a separate benchmark against an independent portable C
-branch loop, with ordinary compiler optimization enabled for both:
+For an optimization investigation, add `--suite full` and use a different output
+directory. The full diagnostic matrix includes portable C comparators, compiled
+library calls, boundary lengths, rejection cases, and both hex cases. Direct C
+benchmark invocations also retain that full coverage; append an iteration count
+and `--core` to select the core cases for that executable. Portable builds disable
+explicit SIMD while allowing compiler vectorization and optimized libc routines.
 
-```sh
-./build/benchmarks/simdurl_bench_validate
-./build/benchmarks/simdurl_bench_validate_scalar
-```
-
-It covers lengths from 0 to 4096 bytes, valid and high-byte inputs, and early/late
-rejection for control/DEL checks with and without space rejection. CSV output
-reports five samples in nanoseconds per call; early exits do not process the
-whole buffer. An optional argument sets iterations per sample (default 100000).
-The `_scalar` target disables explicit SIMD, while compiler vectorization remains
-permitted. Measurements use header-only calls with constant check flags.
-
-Form literal scanning has a separate benchmark for repeated short and long
-literal runs separated by `+` or percent escapes, mixed input, and plain literals:
-
-```sh
-./build/benchmarks/simdurl_bench_formscan
-./build/benchmarks/simdurl_bench_formscan_portable
-./build/benchmarks/simdurl_bench_formscan_compiled
-```
-
-These compare automatic header-only dispatch, portable C/libc, and compiled
-library calls. URI controls use the same inputs. CSV output reports five samples
-in CPU nanoseconds per call for 16 through 16384 input bytes. The optional argument
-sets iterations at 64 bytes (default 20000); longer cases use fewer iterations.
-Portable builds still permit compiler-generated SIMD and optimized libc routines.
-
-Lowercase conversion and hex encoding have benchmarks for header-only,
-portable C, and compiled-library calls:
-
-```sh
-./build/benchmarks/simdurl_bench_helpers
-./build/benchmarks/simdurl_bench_helpers_portable
-./build/benchmarks/simdurl_bench_helpers_compiled
-```
-
-These compare against simple C loops with normal compiler optimization enabled.
-They cover short and long buffers, mixed/unchanged ASCII, high bytes, and both
-hex cases. Separate fixed-length hex calls cover 16-, 20-, 32-, and 64-byte
-digests so constant-length optimization is measured as well as runtime lengths.
-In-place lowercase measurements use already-lowercased input, as labeled in the
-CSV; they do not include an input-reset copy. Timings include call and checksum
-costs, and the compiled variant includes its library call. Pass an iteration
-count to override the default 100000 per sample. Bencher records all three
-variants, including the 63/64/65-byte dispatch boundary, using 500000 iterations
-per sample for helper measurements.
-
-The [historical benchmarking guide](docs/benchmarking.md) describes the Bencher
-workflow, per-commit results, manual backfills, and local verification.
+The [benchmarking guide](docs/benchmarking.md) covers historical results,
+interpreting regressions and improvements, and diagnostics.
 
 ## Releases
 

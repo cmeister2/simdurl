@@ -154,11 +154,12 @@ int main(int argc, char **argv)
   static const size_t lengths[] = { 16, 64, 128, 512, 4096, 16384 };
   size_t iterations = 20000, index;
   unsigned int form, pattern;
-  if(argc > 2) {
-    fprintf(stderr, "Usage: %s [iterations_at_64_bytes]\n", argv[0]);
+  int core = argc == 3;
+  if(argc > 3 || (core && strcmp(argv[2], "--core"))) {
+    fprintf(stderr, "Usage: %s [iterations_at_64_bytes] [--core]\n", argv[0]);
     return 1;
   }
-  if(argc == 2) {
+  if(argc >= 2) {
     char *end;
     unsigned long long parsed;
     errno = 0;
@@ -188,11 +189,14 @@ int main(int argc, char **argv)
       if(lengths[index] <= 256 &&
          (pattern == PLUS_LONG || pattern == PERCENT_LONG))
         continue;
-      for(form = 0; form < 2; ++form)
+      for(form = 0; form < 2; ++form) {
+        if(core && !(lengths[index] == 16384 && pattern == PLUS_LONG && form))
+          continue;
         if(run_case(lengths[index], (enum pattern)pattern, form, iterations)) {
           fputs("Benchmark validation or timer failed\n", stderr);
           return 1;
         }
+      }
     }
   printf("# checksum: %" PRIu64 "\n", checksum);
   return 0;

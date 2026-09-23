@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #if defined(_MSC_VER)
@@ -108,7 +109,7 @@ static double measure(scan_function scan,
 }
 
 static int run_case(size_t length, unsigned int pattern, unsigned int spaces,
-                    size_t iterations)
+                    size_t iterations, int core)
 {
   static const char *const patterns[] = {
     "valid", "first_forbidden", "last_forbidden", "high_bytes"
@@ -127,7 +128,7 @@ static int run_case(size_t length, unsigned int pattern, unsigned int spaces,
     for(row = 0; row < INPUT_COUNT; ++row)
       if(scans[variant](input[row] + row, length) != expected)
         return 1;
-    if(measure(scans[variant], input, length, 1000) < 0)
+    if((!core || variant) && measure(scans[variant], input, length, 1000) < 0)
       return 1;
   }
   for(repeat = 0; repeat < REPEATS; ++repeat) {
@@ -135,6 +136,8 @@ static int run_case(size_t length, unsigned int pattern, unsigned int spaces,
     for(order = 0; order < 2; ++order) {
       double ns;
       variant = (order + repeat) % 2;
+      if(core && !variant)
+        continue;
       ns = measure(scans[variant], input, length, iterations);
       if(ns < 0)
         return 1;
@@ -151,11 +154,12 @@ int main(int argc, char **argv)
   static const size_t lengths[] = { 0, 8, 16, 31, 32, 64, 128, 512, 4096 };
   size_t iterations = 100000, length_index;
   unsigned int pattern, spaces;
-  if(argc > 2) {
-    fprintf(stderr, "Usage: %s [iterations_per_sample]\n", argv[0]);
+  int core = argc == 3;
+  if(argc > 3 || (core && strcmp(argv[2], "--core"))) {
+    fprintf(stderr, "Usage: %s [iterations_per_sample] [--core]\n", argv[0]);
     return 1;
   }
-  if(argc == 2) {
+  if(argc >= 2) {
     char *end;
     unsigned long long parsed;
     errno = 0;
@@ -183,7 +187,9 @@ int main(int argc, char **argv)
       for(pattern = 0; pattern < 4; ++pattern) {
         if(!lengths[length_index] && pattern != 0)
           continue;
-        if(run_case(lengths[length_index], pattern, spaces, iterations)) {
+        if(core && !(lengths[length_index] == 4096 && spaces && !pattern))
+          continue;
+        if(run_case(lengths[length_index], pattern, spaces, iterations, core)) {
           fputs("Benchmark validation or timer failed\n", stderr);
           return 1;
         }

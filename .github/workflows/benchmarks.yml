@@ -39,13 +39,20 @@ jobs:
         run: |
           docker build --platform linux/amd64 --file benchmarks/bencher/Dockerfile \
             --build-arg "SOURCE_SHA=$GITHUB_SHA" --tag simdurl-bencher:smoke .
-          docker run --rm --network none simdurl-bencher:smoke \
-            --codec-repeats 1 --codec-iterations 10000 --validation-iterations 10000 \
-            --formscan-iterations 20000 --helper-iterations 10000 \
-            > "$RUNNER_TEMP/benchmark-smoke.json" 2> "$RUNNER_TEMP/benchmark-smoke.log" || {
-              cat "$RUNNER_TEMP/benchmark-smoke.log" >&2
-              exit 1
-            }
+          # Check both the ten-case dashboard and the opt-in diagnostic suite.
+          for suite in core full; do
+            docker run --rm --network none simdurl-bencher:smoke --suite "$suite" \
+              --codec-repeats 1 --codec-iterations 10000 --validation-iterations 10000 \
+              --formscan-iterations 20000 --helper-iterations 10000 \
+              > "$RUNNER_TEMP/benchmark-$suite.json" 2> "$RUNNER_TEMP/benchmark-$suite.log" || {
+                cat "$RUNNER_TEMP/benchmark-$suite.log" >&2
+                exit 1
+              }
+            expected=10
+            if [ "$suite" = full ]; then expected=1356; fi
+            jq -e --argjson expected "$expected" 'length == $expected' \
+              "$RUNNER_TEMP/benchmark-$suite.json" > /dev/null
+          done
 
   commits:
     needs: tooling
