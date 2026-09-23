@@ -99,6 +99,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Check release tooling
+        run: npm run test:release
       - name: Build and prepare source archive without publishing
         run: npm run release:prepare -- 0.0.0
       - name: Build and test the unpacked archive
@@ -112,7 +114,6 @@ jobs:
 
   release:
     name: Semantic release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [build, sanitizers, source-package]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -122,12 +123,37 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Preview release
+        if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+        run: npm run release:dry-run
       - name: Tag and publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: npm run release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  success:
+    name: Success
+    # Report failed or skipped jobs instead of skipping this required check.
+    if: ${{ always() }}
+    needs: [build, sanitizers, source-package, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all jobs to pass
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          SANITIZERS_RESULT: ${{ needs.sanitizers.result }}
+          SOURCE_PACKAGE_RESULT: ${{ needs.source-package.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+        run: |
+          test "$BUILD_RESULT" = "success"
+          test "$SANITIZERS_RESULT" = "success"
+          test "$SOURCE_PACKAGE_RESULT" = "success"
+          test "$RELEASE_RESULT" = "success"

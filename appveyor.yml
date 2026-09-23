@@ -1,0 +1,29 @@
+version: '{build}'
+image: Visual Studio 2022
+clone_depth: 1
+skip_tags: true
+# The PR build covers pushes to branches with an open pull request.
+skip_branch_with_pr: true
+
+# Package downloads only, limited to 128 MiB for each matrix job.
+cache:
+  - C:\simdurl-cache
+
+environment:
+  matrix:
+    - SIMDURL_TOOLCHAIN: UCRT64
+    - SIMDURL_TOOLCHAIN: CLANG64
+    # The legacy environment adds native 32-bit Windows coverage.
+    - SIMDURL_TOOLCHAIN: MINGW32
+    - SIMDURL_TOOLCHAIN: CYGWIN64
+
+install:
+  - ps: .\scripts\appveyor.ps1 -Phase Install
+
+build_script:
+  - ps: .\scripts\appveyor.ps1 -Phase Build
+
+test_script:
+  - ps: .\scripts\appveyor.ps1 -Phase Test
+
+deploy: off

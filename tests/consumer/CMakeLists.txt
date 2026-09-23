@@ -29,7 +29,7 @@ else()
 endif()
 add_test(NAME installed_consumer COMMAND consumer)
 
-if(WIN32 AND NOT SIMDURL_USE_HEADER_ONLY)
+if((WIN32 OR CYGWIN) AND NOT SIMDURL_USE_HEADER_ONLY)
   get_target_property(simdurl_imported_type simdurl::simdurl TYPE)
   if(simdurl_imported_type STREQUAL "SHARED_LIBRARY")
     foreach(target IN ITEMS consumer consumer_cpp)

@@ -18,7 +18,7 @@
 
 #if defined(SIMDURL_HEADER_ONLY)
 #define SIMDURL_API static inline
-#elif defined(_WIN32) && defined(SIMDURL_SHARED)
+#elif (defined(_WIN32) || defined(__CYGWIN__)) && defined(SIMDURL_SHARED)
 #if defined(SIMDURL_BUILD)
 #define SIMDURL_API __declspec(dllexport)
 #else
