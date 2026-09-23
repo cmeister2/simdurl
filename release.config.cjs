@@ -9,8 +9,8 @@ module.exports = {
     }],
     ["@semantic-release/github", {
       assets: [
-        { path: "dist/simdurl-*.tar.gz", label: "Source archive" },
-        { path: "dist/SHA256SUMS", label: "Source archive checksum" },
+        { path: "dist/simdurl-*.tar.gz" },
+        { path: "dist/SHA256SUMS" },
       ],
       successCommentCondition: false,
       failCommentCondition: false,
