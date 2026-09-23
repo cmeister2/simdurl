@@ -1,5 +1,5 @@
 # Keep compiler and runtime changes in a new Bencher testbed/harness version.
-FROM gcc:14.2.0-bookworm@sha256:b99b86a28812b1e6453a231a947dc43d76fe192788a12f344a9b568bf9f5d24c AS build
+FROM gcc:14.3.0-bookworm@sha256:5e927c284bf55a7dc796262e311a0703344f62f41f5621eb56843111b1d37e15 AS build
 WORKDIR /src
 COPY include/ include/
 COPY benchmarks/bench.c benchmarks/bench_validate.c benchmarks/bench_formscan.c benchmarks/bencher/backend_info.c ./
@@ -21,7 +21,7 @@ RUN mkdir /out && \
     printf '%s\n' "$SOURCE_SHA" > /out/source-sha && \
     printf '%s\n' '-std=c99 -O3 -DNDEBUG; header-only: -DSIMDURL_HEADER_ONLY; scalar: -DSIMDURL_DISABLE_SIMD=1; compiled formscan: separate simdurl.c object and -DSIMDURL_BENCH_COMPILED=1 benchmark; no native tuning or LTO' > /out/compiler-flags
 
-FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+FROM python:3.14.7-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
 WORKDIR /opt/simdurl
 COPY --from=build /out/ benchmarks/
 COPY scripts/benchmark.py benchmarks/bencher/run.py ./
