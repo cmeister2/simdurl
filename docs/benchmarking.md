@@ -28,9 +28,12 @@ image. Registry credentials use a temporary Docker configuration, and the login
 action logs out during its cleanup. The builder action removes its builder after
 the build action has finished exporting its records.
 
-Pull requests run the exporter/range tests and a short container smoke check
-without credentials or network access inside the container. These checks do
-not publish performance measurements. Publishing is restricted to `main`.
+Pull requests run the separate [Benchmark checks workflow](../.github/workflows/benchmark-tooling.yml)
+with exporter/range tests and a short container smoke check, without credentials
+or network access inside the container. The main benchmark workflow calls that
+same validation workflow before selecting commits and publishing measurements.
+This keeps execution and cleanup jobs out of PR checks while preserving the
+validation gate on `main`. Publishing is restricted to `main`.
 
 The first run begins after this workflow reaches `main`. Each push enumerates
 all new **first-parent mainline commits**, including intermediate commits in a

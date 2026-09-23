@@ -443,8 +443,10 @@ image-build job uses no GitHub environment and has no OIDC permission.
 
 Each push uses the existing commit matrix, including intermediate first-parent
 commits in a multi-commit push. Azure matrix jobs run sequentially and existing
-main-branch workflow concurrency queues pushes. Pull requests only validate
-tooling and containers. No manual launch is needed for the Azure lane. The
+main-branch workflow concurrency queues pushes. Pull requests run only the
+separate [Benchmark checks workflow](../.github/workflows/benchmark-tooling.yml),
+which validates tooling and containers. The main benchmark workflow calls the
+same validation before allocating resources. No manual launch is needed for the Azure lane. The
 existing historical backfill facility remains available for recovering gaps.
 
 Publication reads saved `results.json` with Bencher's file adapter and records

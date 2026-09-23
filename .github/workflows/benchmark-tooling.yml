@@ -1,0 +1,62 @@
+name: Benchmark checks
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  tooling:
+    name: Benchmark tooling
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Check benchmark tooling
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_benchmark*.py'
+          python3 -m unittest discover -s infra/azure -p 'test_*.py'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the smoke-test image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: benchmarks/bencher/Dockerfile
+          platforms: linux/amd64
+          build-args: SOURCE_SHA=${{ github.sha }}
+          tags: simdurl-bencher:smoke
+          load: true
+          provenance: false
+      - name: Smoke-test the benchmark image without credentials
+        run: |
+          # Exercise the hosted Docker store's export format before Azure allocation.
+          docker save --output "$RUNNER_TEMP/benchmark-image.tar" simdurl-bencher:smoke
+          PYTHONPATH=scripts python3 - "$RUNNER_TEMP/benchmark-image.tar" <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+          from benchmark_azure_guest import archive_image
+          image_id = subprocess.check_output([
+              "docker", "image", "inspect", "--format", "{{.Id}}", "simdurl-bencher:smoke",
+          ], text=True).strip()
+          archive_image(Path(sys.argv[1]), image_id)
+          PY
+          # Check both the ten-case dashboard and the opt-in diagnostic suite.
+          for suite in core full; do
+            docker run --rm --network none simdurl-bencher:smoke --suite "$suite" \
+              --codec-repeats 1 --codec-iterations 10000 --validation-iterations 10000 \
+              --formscan-iterations 20000 --helper-iterations 10000 \
+              > "$RUNNER_TEMP/benchmark-$suite.json" 2> "$RUNNER_TEMP/benchmark-$suite.log" || {
+                cat "$RUNNER_TEMP/benchmark-$suite.log" >&2
+                exit 1
+              }
+            expected=10
+            if [ "$suite" = full ]; then expected=1356; fi
+            jq -e --argjson expected "$expected" 'length == $expected' \
+              "$RUNNER_TEMP/benchmark-$suite.json" > /dev/null
+          done
