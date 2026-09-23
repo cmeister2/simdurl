@@ -41,7 +41,7 @@ foreach(mode IN ITEMS library header_only)
   add_test(NAME simdurl_test_cpp_${mode} COMMAND simdurl_test_cpp_${mode})
 endforeach()
 
-if(WIN32 AND BUILD_SHARED_LIBS)
+if((WIN32 OR CYGWIN) AND BUILD_SHARED_LIBS)
   foreach(target IN ITEMS simdurl_test simdurl_test_cpp_library)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
