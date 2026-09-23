@@ -52,74 +52,155 @@ from the requested commit. This holds the workload constant during a backfill.
 Revisions before the ASCII lowercase and hex APIs were introduced cannot build
 the complete current suite; missing measurements never mean zero performance.
 
+## Ten benchmarks by default
+
+The default `--suite core` runs and publishes **ten series**, all using automatic
+header-only dispatch. The C executables skip unselected workloads before timing;
+portable and compiled executables are only run with `--suite full`.
+
+The table gives exact existing names, with the common `/simdurl/automatic` suffix
+omitted. Keeping these names retains their historical identity.
+
+| Benchmark name prefix | Purpose |
+| --- | --- |
+| `codec/encode/URI/mixed/128` | Representative short URL encoding |
+| `codec/decode/form/mixed/128` | Representative percent/plus decoding |
+| `codec/encode/URI/literal/4096` | Literal scan/copy fast path |
+| `codec/encode/URI/dense/4096` | Bulk escape expansion and VBMI2 encoding |
+| `codec/decode/URI/dense/4096` | Bulk percent decoding and VBMI2 compression |
+| `formscan/form/plus_long/16384` | Repeated 256-byte literal runs between plus markers |
+| `validate/C0_DEL_SPACE/valid/4096` | Full-buffer scanning with control/DEL/space checks |
+| `helpers/ascii_copy/mixed_ascii/128/runtime` | Header/token lowercase conversion |
+| `helpers/hex_lower/binary/32/fixed` | Constant-length digest encoding |
+| `helpers/hex_lower/binary/4096/runtime` | Bulk hex expansion |
+
+These are representative synthetic workloads, not a production traffic profile.
+They protect distinct paths without publishing every length, policy, comparator,
+and build arrangement. Previously published series remain in Bencher history;
+select these ten in a saved plot to exclude inactive historical series.
+
 ## Measurement contract
 
-The image pins GCC 14.2.0 and Python 3.12.12 by image digest. It compiles the
-header-only benchmarks with `-std=c99 -O3 -DNDEBUG`, without `-march=native`.
-The scalar variants additionally define `SIMDURL_DISABLE_SIMD=1`; ordinary
-compiler vectorization remains enabled.
+The image pins GCC 14.3.0 and Python 3.14.7 by image digest in
+[`Dockerfile`](../benchmarks/bencher/Dockerfile). It compiles with
+`-std=c99 -O3 -DNDEBUG`, without `-march=native`. Function target attributes compile
+the accelerated kernels; runtime CPU checks select available backends.
 
-The ten executables produce 1,356 series: 72 codec, 264 byte validation,
-180 form-scanning, and 840 ASCII lowercase/hex helper series. Codec and validation
-use automatic and scalar header-only builds. Form scanning and helpers also
-measure a separately compiled library, linked without LTO. Every case has five
-samples.
-Bencher stores median
-**CPU-time nanoseconds per operation**, with observed minimum and maximum as
-bounds; these bounds are not confidence intervals. Codec elapsed time is
-converted to latency, so byte throughput is never mislabeled as operations/sec.
+Every core case has five samples by default. Bencher stores median **CPU-time
+nanoseconds per operation**, with observed minimum and maximum as bounds; these
+bounds are not confidence intervals. Codec elapsed time is converted to latency,
+so byte throughput is never mislabeled as operations/sec. Lower latency is better.
 
-The `formscan/` series use fixed-mode, non-inlined wrappers for URI and form
-decoding, with literal, plus-separated, percent-separated, and mixed inputs
-from 16 to 16,384 bytes. Long-marker cases use 256-byte literal runs and omit
-short inputs that would duplicate the literal case. The benchmark checks an
-independent decoding oracle outside timing. Its `automatic`, `scalar`, and
-`compiled` series keep the different calling and build arrangements separate.
-The scalar executable is named `simdurl_bench_formscan_portable`, matching CMake.
+Codec and validation use 100,000 iterations per sample. Form scanning uses
+`max(1, 100000 // ceil(length / 64))`, or 390 iterations for its 16 KiB core case.
+Helpers use 500,000 iterations per sample. Timings include the existing wrapper,
+status checks, barriers, and checksum sampling. Helper and validation comparators
+still check correctness outside timing in core mode.
 
-Form scanning defaults to 100,000 iterations at 16/64 bytes, then scales to
-`max(1, base_iterations / ceil(length / 64))` for larger inputs. Each sample
-reports CPU nanoseconds per operation directly. Existing codec and validation
-workloads, iteration counts, and metric names are unchanged; adding these new
-series retains their existing testbed and comparison history. Form scanning
-runs after the original workloads.
-
-The `helpers/` series measure ASCII lowercase copy and exact in-place conversion,
-plus lowercase and uppercase hex encoding. The full suite contains 140 workloads:
-runtime lengths from 0 to 4,096 bytes, including 15/16/17, 31/32/33, and 63/64/65
-boundaries, plus fixed-size hex calls at 16, 20, 32, and 64 bytes. Each workload
-has an independent optimized C comparator and a `simdurl` implementation, across
-`automatic`, `scalar`, and `compiled` builds: 140 × 2 × 3 = 840 series.
-Filter by `helpers/` and operation/build when comparing their histories.
-
-Helper samples default to 500,000 iterations, alternating comparator/library
-order across five samples. Fixed-size wrappers expose the same constant length
-and case to both sides. The `ascii_inplace_already_lowered` cases start with
-already-lowercased data; input-reset copying is outside timing. Timings include
-wrapper calls and checksum sampling. The C comparator assumes valid arguments
-and permits compiler vectorization; the public API performs its usual checks.
-The compiled build preserves a separate API call without LTO.
-
-Helpers run after the existing families. Harness metadata is version 3; existing
-series retain their names, workloads, iteration counts, and testbed. Appending
-new helper series therefore preserves the earlier comparison history.
+Harness metadata version 4 records the selected suite and published benchmark
+count. Case inputs, iteration defaults, timing loops, and metric names are
+unchanged, but reducing surrounding work can affect machine state. For a precise
+before/after claim, rerun both revisions with the same core harness rather than
+attributing a change across the harness transition entirely to the library.
 
 The exporter rejects incomplete output, duplicate cases, nonpositive or
-nonfinite timing, failed subprocesses, and inconsistent checksums. Its case
-matrix must be updated when the C harness changes.
+nonfinite timing, failed subprocesses, and inconsistent repeated checksums.
+The selected case matrices must match the C filters.
 
-The testbed is `intel-v1-gcc14-v1`. Increment its version when changing the
-compiler, flags, measurement method, or workload semantics, so incompatible
+The hosted testbed is `intel-v1-gcc14-v1`. Use a new version when changing the
+compiler, flags, measurement method, or workload semantics so incompatible
 measurements do not share a trend line. Keep case names stable when the workload
-is unchanged.
+is unchanged. Hardware changes require a separate testbed or baseline.
 
-Bencher's published `intel-v1` specification does not guarantee VBMI2.
-Each job captures CPU features and the library's available encode/decode/validate
-and helper backends for full SIMD blocks. Helper AVX2 dispatch starts at 64 bytes;
-shorter inputs can use SSE2 or portable tails.
-The initial hosted run exposed AVX2 encoding/validation and the portable
-decoder, without VBMI2. Tracking the VBMI2 path requires a different capable
-testbed. Hardware changes require a separate testbed or baseline.
+## Reading regressions and improvements
+
+Compare each case against earlier runs on the same testbed. Do not combine the
+ten timings into one score: a regression in decoding could be hidden by faster
+hex encoding. As an initial review policy, investigate repeatable slowdowns of
+20% or more; calibrate that threshold after observing normal run-to-run variation.
+This is a suggested review threshold, not an enabled release gate.
+
+For a SIMD change, run the before and after revisions with the same harness,
+compiler, CPU, and iteration counts. Repeat the runs with alternating revision
+order. A convincing gain persists across runs and exceeds the ordinary spread;
+one lower sample is insufficient. Use the full suite to examine the affected
+sizes and patterns after the core suite identifies a change. Correctness and
+boundary coverage belong in tests, even when they are absent from the dashboard.
+
+Bencher supports [percentage thresholds](https://bencher.dev/docs/explanation/thresholds/)
+for alerts; configure them after collecting a stable baseline. Keep improvement
+review separate from regression alerts so expected speedups do not become failures.
+
+## Measuring native VBMI2
+
+The initial hosted run exposed AVX2 encoding/validation and the portable decoder,
+without VBMI2. Bencher's published
+[`intel-v1` specification](https://bencher.dev/docs/explanation/testbeds/) does not
+guarantee VBMI2. Each job captures CPU flags and available full-block backends in
+its evidence; check that evidence for the actual run.
+
+Use a fixed native machine whose CPU and OS expose the complete feature set
+required by `simdurl_detail_has_vbmi2()`. Run the same ten cases with the same
+container compiler and flags under a separate testbed. No extra benchmark names
+are needed. The bulk codec cases already reach VBMI2 on supported hardware;
+AVX2 handles the long validation/lowercase/hex cases. The 32-byte fixed hex case
+covers a shorter path (helper AVX2 dispatch starts at 64 bytes).
+
+Build the image as in Local verification, then require VBMI2 at execution time:
+
+```sh
+mkdir -p build-bencher/native-vbmi2
+docker run --rm --network none -e SIMDURL_BENCH_REQUIRE_VBMI2=1 \
+  simdurl-bencher:local > build-bencher/native-vbmi2/results.json \
+  2> build-bencher/native-vbmi2/evidence.json
+```
+
+The preflight exits unsuccessfully before emitting metrics if encode/decode
+would fall back. For a direct local probe, compile
+`benchmarks/bencher/backend_info.c` with `-DSIMDURL_HEADER_ONLY -Iinclude` and run
+it with `--require-vbmi2`. Unset or `0` leaves the container requirement disabled;
+values other than `0` and `1` are rejected.
+
+After a successful run, Bencher can
+[ingest the local JSON](https://bencher.dev/docs/how-to/track-custom-benchmarks/).
+For example, with `BENCHER_API_KEY` configured:
+
+```sh
+bencher run --project simdurl --branch main --hash "$(git rev-parse HEAD)" \
+  --testbed native-vbmi2-gcc14-v1 --adapter json \
+  --file build-bencher/native-vbmi2/results.json
+```
+
+Use a stable testbed name identifying your actual machine, and record the source
+SHA used to build the image. Archive the evidence alongside the report. Filter
+the dashboard by testbed to keep ten visible lines; two testbeds shown together
+produce twenty lines. Provisioning that native runner is separate from the hosted
+workflow. Intel SDE in CI verifies instruction-path correctness and must not supply
+performance measurements. ARM currently has a portable fallback, not an explicit
+NEON backend.
+
+## Full diagnostic suite
+
+`--suite full` retains 1,356 series: 72 codec, 264 validation, 180 form-scanning,
+and 840 lowercase/hex helper series. The ten executables include automatic and
+portable header-only variants plus separately compiled formscan/helpers without
+LTO. Ordinary compiler vectorization remains enabled in portable variants.
+
+The full formscan matrix covers URI/form, literal/plus/percent/mixed inputs and
+16–16,384 bytes. Long-marker cases use 256-byte literal runs and omit duplicate
+short-input cases. It checks an independent decoder outside timing.
+
+The helper matrix covers runtime lengths 0–4,096, SIMD boundaries, and fixed
+16/20/32/64-byte digests, with independent optimized C comparators. Samples
+alternate comparator/library order. Fixed-size wrappers expose the same constants
+to both variants. In-place lowercase inputs are already lowercased; no reset copy
+is timed. Comparator loops assume valid arguments while the public API retains
+its checks. Validation includes high bytes and early/late rejection, which are
+reported as call latency because early rejection need not inspect the full input.
+
+Use this suite for local investigations, not routine publication to the ten-case
+dashboard. Direct C executable invocations retain full coverage by default;
+`EXECUTABLE ITERATIONS --core` selects only that family's core cases.
 
 ## Results and evidence
 
@@ -164,7 +245,8 @@ python3 scripts/benchmark.py --bin-dir build-bencher/benchmarks \
 
 The output directory must be empty. The command emits Bencher Metric Format
 JSON on stdout and saves the same metrics, raw output, metadata, and samples in
-the directory. Optional `--codec-iterations`, `--codec-repeats`,
+the directory. Add `--suite full` with a fresh output directory for diagnostics.
+Optional `--codec-iterations`, `--codec-repeats`,
 `--validation-iterations`, `--formscan-iterations`, and `--helper-iterations`
 arguments support smoke checks. Very small iteration counts may round to zero
 and are rejected.

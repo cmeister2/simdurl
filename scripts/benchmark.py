@@ -23,7 +23,7 @@ import sys
 import time
 
 
-HARNESS_VERSION = 3
+HARNESS_VERSION = 4
 VALIDATION_REPEATS = 5
 FORMSCAN_REPEATS = 5
 HELPER_REPEATS = 5
@@ -69,6 +69,27 @@ HELPER_CASES = {
 }
 
 
+# Ordinary calls plus workloads that expose SIMD throughput. Keep the existing
+# names and workload semantics for historical comparison; --suite full retains
+# the complete diagnostic matrices above.
+CORE_CASES = {
+    "codec": {
+        ("encode", "URI", "mixed", "128"),
+        ("decode", "form", "mixed", "128"),
+        ("encode", "URI", "literal", "4096"),
+        ("encode", "URI", "dense", "4096"),
+        ("decode", "URI", "dense", "4096"),
+    },
+    "validate": {("C0_DEL_SPACE", "valid", "4096", "simdurl")},
+    "formscan": {("form", "plus_long", "16384")},
+    "helpers": {
+        ("ascii_copy", "mixed_ascii", "128", "runtime", "simdurl"),
+        ("hex_lower", "binary", "32", "fixed", "simdurl"),
+        ("hex_lower", "binary", "4096", "runtime", "simdurl"),
+    },
+}
+
+
 class BenchmarkError(Exception):
     """The benchmark did not produce a complete, usable measurement."""
 
@@ -93,7 +114,8 @@ def checksum(line, prefix):
     return int(match.group(1))
 
 
-def parse_codec(output, build, iterations):
+def parse_codec(output, build, iterations, suite="full"):
+    cases = CORE_CASES["codec"] if suite == "core" else CODEC_CASES
     lines = output.splitlines()
     backend = {
         "automatic": "Backend: automatic CPU selection (header-only)",
@@ -113,7 +135,7 @@ def parse_codec(output, build, iterations):
         if len(fields) != 6:
             raise BenchmarkError(f"Malformed codec row: {line!r}")
         case = tuple(fields[:4])
-        if case not in CODEC_CASES or case in seen:
+        if case not in cases or case in seen:
             raise BenchmarkError(f"Unexpected or duplicate codec case: {case!r}")
         seen.add(case)
         elapsed_ms = positive_number(fields[4], "codec elapsed_ms")
@@ -123,12 +145,13 @@ def parse_codec(output, build, iterations):
         # GB/s counts bytes, while Bencher's built-in throughput counts ops/s.
         # Use the elapsed CPU time to report ns per complete codec operation.
         result[name] = [positive_number(elapsed_ms * 1e6 / iterations, "codec ns/op")]
-    if seen != CODEC_CASES:
-        raise BenchmarkError(f"Incomplete codec output: {len(seen)}/{len(CODEC_CASES)} cases")
+    if seen != cases:
+        raise BenchmarkError(f"Incomplete codec output: {len(seen)}/{len(cases)} cases")
     return result, checksum(lines[-1], "Checksum: ")
 
 
-def parse_validation(output, build, iterations):
+def parse_validation(output, build, iterations, suite="full"):
+    cases = CORE_CASES["validate"] if suite == "core" else VALIDATION_CASES
     lines = output.splitlines()
     backend = {
         "automatic": "# simdurl: automatic CPU selection (header-only)",
@@ -150,7 +173,7 @@ def parse_validation(output, build, iterations):
             raise BenchmarkError(f"Malformed validation row: {fields!r}")
         case = tuple(fields[:4])
         sample = fields[4]
-        if (case not in VALIDATION_CASES
+        if (case not in cases
                 or sample not in {str(i) for i in range(1, VALIDATION_REPEATS + 1)}
                 or (case, sample) in seen):
             raise BenchmarkError(f"Unexpected or duplicate validation sample: {fields[:5]!r}")
@@ -158,7 +181,7 @@ def parse_validation(output, build, iterations):
         checks, pattern, length, variant = case
         name = f"validate/{checks}/{pattern}/{length}/{variant}/{build}"
         result.setdefault(name, {})[int(sample)] = positive_number(fields[5], "validation ns/op")
-    expected_samples = len(VALIDATION_CASES) * VALIDATION_REPEATS
+    expected_samples = len(cases) * VALIDATION_REPEATS
     if len(seen) != expected_samples:
         raise BenchmarkError(f"Incomplete validation output: {len(seen)}/{expected_samples} samples")
     return {
@@ -167,7 +190,8 @@ def parse_validation(output, build, iterations):
     }, checksum(lines[-1], "# checksum: ")
 
 
-def parse_formscan(output, build, iterations):
+def parse_formscan(output, build, iterations, suite="full"):
+    cases = CORE_CASES["formscan"] if suite == "core" else FORMSCAN_CASES
     lines = output.splitlines()
     backend = {
         "automatic": "# automatic CPU selection (header-only)",
@@ -192,7 +216,7 @@ def parse_formscan(output, build, iterations):
                 raise BenchmarkError(f"Malformed formscan row: {fields!r}")
             case = tuple(fields[:3])
             sample = fields[4]
-            if (case not in FORMSCAN_CASES
+            if (case not in cases
                     or sample not in {str(i) for i in range(1, FORMSCAN_REPEATS + 1)}
                     or (case, sample) in seen):
                 raise BenchmarkError(f"Unexpected or duplicate formscan sample: {fields[:5]!r}")
@@ -211,7 +235,7 @@ def parse_formscan(output, build, iterations):
             result.setdefault(name, {})[int(sample)] = ns_per_op
     except csv.Error as error:
         raise BenchmarkError(f"Malformed formscan CSV: {error}") from error
-    expected_samples = len(FORMSCAN_CASES) * FORMSCAN_REPEATS
+    expected_samples = len(cases) * FORMSCAN_REPEATS
     if len(seen) != expected_samples:
         raise BenchmarkError(f"Incomplete formscan output: {len(seen)}/{expected_samples} samples")
     return {
@@ -220,7 +244,8 @@ def parse_formscan(output, build, iterations):
     }, checksum(lines[-1], "# checksum: ")
 
 
-def parse_helpers(output, build, iterations):
+def parse_helpers(output, build, iterations, suite="full"):
+    cases = CORE_CASES["helpers"] if suite == "core" else HELPER_CASES
     lines = output.splitlines()
     backend = {
         "automatic": "# simdurl: automatic CPU selection (header-only)",
@@ -235,7 +260,8 @@ def parse_helpers(output, build, iterations):
         "# fixed hex wrappers expose constant lengths and case to both variants",
         "# inplace inputs are already lowercased before timing; no input-reset cost included",
         "# checksums, output sampling and call overhead are included in both timings",
-        f"# {iterations} iterations/sample; {HELPER_REPEATS} alternating samples; CPU time; ns/operation",
+        f"# {iterations} iterations/sample; {HELPER_REPEATS} "
+        f"{'samples' if suite == 'core' else 'alternating samples'}; CPU time; ns/operation",
         "operation,pattern,bytes,length_kind,variant,sample,ns_per_op",
     ]
     if len(lines) < 10 or lines[:9] != headers:
@@ -248,7 +274,7 @@ def parse_helpers(output, build, iterations):
                 raise BenchmarkError(f"Malformed helpers row: {fields!r}")
             case = tuple(fields[:5])
             sample = fields[5]
-            if (case not in HELPER_CASES
+            if (case not in cases
                     or sample not in {str(i) for i in range(1, HELPER_REPEATS + 1)}
                     or (case, sample) in seen):
                 raise BenchmarkError(f"Unexpected or duplicate helpers sample: {fields[:6]!r}")
@@ -258,7 +284,7 @@ def parse_helpers(output, build, iterations):
             result.setdefault(name, {})[int(sample)] = positive_number(fields[6], "helpers ns/op")
     except csv.Error as error:
         raise BenchmarkError(f"Malformed helpers CSV: {error}") from error
-    expected_samples = len(HELPER_CASES) * HELPER_REPEATS
+    expected_samples = len(cases) * HELPER_REPEATS
     if len(seen) != expected_samples:
         raise BenchmarkError(f"Incomplete helpers output: {len(seen)}/{expected_samples} samples")
     return {
@@ -306,8 +332,10 @@ def machine_metadata():
     return metadata
 
 
-def run_process(executable, iterations, raw_dir, label, timeout, runs):
+def run_process(executable, iterations, raw_dir, label, timeout, runs, suite="full"):
     command = [str(executable), str(iterations)]
+    if suite == "core":
+        command.append("--core")
     record = {"command": command, "label": label}
     runs.append(record)
     start = time.monotonic()
@@ -348,6 +376,7 @@ def run(args):
     raw_dir.mkdir()
     metadata = {
         "harness_version": HARNESS_VERSION,
+        "suite": args.suite,
         "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "commit": args.commit,
         "machine": machine_metadata(),
@@ -380,6 +409,8 @@ def run(args):
         ):
             builds = (FORMSCAN_BUILDS if family == "formscan" else
                       HELPER_BUILDS if family == "helpers" else BUILDS)
+            if args.suite == "core":
+                builds = ("automatic",)
             for repeat in range(repeats):
                 for build in builds[::1 if repeat % 2 == 0 else -1]:
                     executable_name = "simdurl_bench" + suffix
@@ -394,8 +425,9 @@ def run(args):
                             "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
                         }
                     label = f"{family}-{build}-{repeat + 1}"
-                    output = run_process(executable, iterations, raw_dir, label, args.timeout, metadata["runs"])
-                    parsed, observed_checksum = parse(output, build, iterations)
+                    output = run_process(executable, iterations, raw_dir, label, args.timeout,
+                                         metadata["runs"], args.suite)
+                    parsed, observed_checksum = parse(output, build, iterations, args.suite)
                     if family in checksums and checksums[family] != observed_checksum:
                         raise BenchmarkError(f"{family} checksums differ between repeated runs or builds")
                     checksums[family] = observed_checksum
@@ -403,6 +435,7 @@ def run(args):
                         samples.setdefault(name, []).extend(values)
         result = bmf(samples)
         metadata["checksums"] = checksums
+        metadata["benchmark_count"] = len(result)
         metadata["status"] = "complete"
         write_json(output_dir / "results.json", result)
         return result
@@ -428,6 +461,8 @@ def positive_int(value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("core", "full"), default="core",
+                        help="core: ten regression benchmarks (default); full: diagnostic matrix")
     parser.add_argument("--bin-dir", type=Path, default=Path("build/benchmarks"))
     parser.add_argument("--output-dir", type=Path, default=Path("benchmark-results"), help="empty directory for raw output and metadata")
     parser.add_argument("--codec-iterations", type=positive_int, default=100000)

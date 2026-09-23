@@ -311,12 +311,13 @@ class RunnerTests(unittest.TestCase):
             (self.bin_dir / ("simdurl_bench" + suffix)).write_bytes(b"fake benchmark for mocked subprocess")
         self.output_dir = self.root / "results"
 
-    def invoke(self, *args):
+    def invoke(self, *args, suite="full"):
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             status = benchmark.main([
                 "--bin-dir", str(self.bin_dir), "--output-dir", str(self.output_dir),
-                "--codec-repeats", "3", "--codec-iterations", "10000", "--commit", "test-commit", *args,
+                "--codec-repeats", "3", "--codec-iterations", "10000", "--commit", "test-commit",
+                *(["--suite", suite] if suite is not None else []), *args,
             ])
         return status, stdout.getvalue(), stderr.getvalue()
 
@@ -328,7 +329,93 @@ class RunnerTests(unittest.TestCase):
         fixture = (helpers_output if "helpers" in executable else
                    formscan_output if "formscan" in executable else
                    validation_output if "validate" in executable else codec_output)
-        return subprocess.CompletedProcess(command, 0, fixture(build, int(command[1])), "")
+        output = fixture(build, int(command[1]))
+        if "--core" in command:
+            family, header_rows, fields = (
+                ("helpers", 9, 5) if "helpers" in executable else
+                ("formscan", 6, 3) if "formscan" in executable else
+                ("validate", 5, 4) if "validate" in executable else ("codec", 3, 4)
+            )
+            lines = output.splitlines()
+            rows = [line for line in lines[header_rows:-1]
+                    if tuple((line.split() if family == "codec" else line.split(","))[:fields])
+                    in benchmark.CORE_CASES[family]]
+            output = "\n".join(lines[:header_rows] + rows + lines[-1:]) + "\n"
+            if family == "helpers":
+                output = output.replace("5 alternating samples", "5 samples")
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
+    def test_default_runs_only_ten_core_benchmarks_with_existing_names(self, subprocess_run):
+        # Core must work with only the four automatic executables installed.
+        for executable in self.bin_dir.iterdir():
+            if executable.name.endswith(("_scalar", "_portable", "_compiled")):
+                executable.unlink()
+        status, stdout, stderr = self.invoke(suite=None)
+        self.assertEqual((status, stderr), (0, ""))
+        result = json.loads(stdout)
+        self.assertEqual(set(result), {
+            "codec/encode/URI/mixed/128/simdurl/automatic",
+            "codec/decode/form/mixed/128/simdurl/automatic",
+            "codec/encode/URI/literal/4096/simdurl/automatic",
+            "codec/encode/URI/dense/4096/simdurl/automatic",
+            "codec/decode/URI/dense/4096/simdurl/automatic",
+            "validate/C0_DEL_SPACE/valid/4096/simdurl/automatic",
+            "formscan/form/plus_long/16384/simdurl/automatic",
+            "helpers/ascii_copy/mixed_ascii/128/runtime/simdurl/automatic",
+            "helpers/hex_lower/binary/32/fixed/simdurl/automatic",
+            "helpers/hex_lower/binary/4096/runtime/simdurl/automatic",
+        })
+        self.assertEqual(result, json.loads((self.output_dir / "results.json").read_text()))
+        samples = json.loads((self.output_dir / "samples.json").read_text())
+        self.assertEqual(set(samples), set(result))
+        for name, values in samples.items():
+            self.assertEqual(len(values), 3 if name.startswith("codec/") else 5)
+        metadata = json.loads((self.output_dir / "metadata.json").read_text())
+        self.assertEqual((metadata["suite"], metadata["benchmark_count"]), ("core", 10))
+        self.assertEqual(metadata["status"], "complete")
+        self.assertEqual(len(metadata["executables"]), 4)
+        self.assertEqual(subprocess_run.call_count, 6)
+        self.assertTrue(all(call.args[0][-1] == "--core" for call in subprocess_run.call_args_list))
+
+    @mock.patch.object(benchmark.subprocess, "run")
+    def test_core_rejects_missing_samples_and_full_output_without_publishing(self, subprocess_run):
+        for family, executable, header_rows in (
+                ("codec", "simdurl_bench", 3), ("validate", "simdurl_bench_validate", 5),
+                ("formscan", "simdurl_bench_formscan", 6), ("helpers", "simdurl_bench_helpers", 9)):
+            for malformed in ("missing", "full"):
+                with self.subTest(family=family, malformed=malformed):
+                    self.output_dir = self.root / f"{family}-{malformed}"
+
+                    def process(command, **kwargs):
+                        if Path(command[0]).name != executable:
+                            return self.fake_process(command, **kwargs)
+                        if malformed == "full":
+                            result = self.fake_process(command[:-1], **kwargs)
+                            # Test rejection of extra rows, not just the helper header.
+                            result.stdout = result.stdout.replace("5 alternating samples", "5 samples")
+                        else:
+                            result = self.fake_process(command, **kwargs)
+                            lines = result.stdout.splitlines()
+                            result.stdout = "\n".join(lines[:header_rows] + lines[header_rows + 1:]) + "\n"
+                        return result
+
+                    subprocess_run.side_effect = process
+                    status, stdout, stderr = self.invoke(suite="core")
+                    self.assertEqual((status, stdout), (1, ""))
+                    self.assertIn("Incomplete" if malformed == "missing" else "Unexpected", stderr)
+                    self.assertFalse((self.output_dir / "results.json").exists())
+                    self.assertEqual(json.loads((self.output_dir / "metadata.json").read_text())["status"], "failed")
+
+    @mock.patch.object(benchmark.subprocess, "run")
+    def test_core_repeated_codec_checksum_mismatch_is_rejected(self, subprocess_run):
+        first = self.fake_process([str(self.bin_dir / "simdurl_bench"), "10000", "--core"])
+        second = subprocess.CompletedProcess(first.args, 0, first.stdout.replace("123456", "999999"), "")
+        subprocess_run.side_effect = [first, second]
+        status, stdout, stderr = self.invoke(suite="core")
+        self.assertEqual((status, stdout), (1, ""))
+        self.assertIn("checksums differ", stderr)
+        self.assertFalse((self.output_dir / "results.json").exists())
 
     @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
     def test_complete_run_outputs_only_bmf_and_retains_evidence(self, subprocess_run):
@@ -357,7 +444,9 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(sum(len(values) for name, values in samples.items() if name.startswith("formscan/")), 900)
         metadata = json.loads((self.output_dir / "metadata.json").read_text())
         self.assertEqual(metadata["status"], "complete")
-        self.assertEqual(metadata["harness_version"], 3)
+        self.assertEqual(metadata["harness_version"], 4)
+        self.assertEqual(metadata["suite"], "full")
+        self.assertEqual(metadata["benchmark_count"], 1356)
         self.assertEqual(metadata["commit"], "test-commit")
         self.assertEqual(metadata["formscan_iterations"], 100000)
         self.assertEqual(metadata["formscan_repeats"], 5)

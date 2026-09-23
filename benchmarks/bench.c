@@ -92,12 +92,12 @@ int main(int argc, char **argv)
   static const size_t lengths[] = { 16, 128, 4096 };
   size_t iterations = 10000, length_index;
   unsigned int pattern, flags;
-  int decode;
-  if(argc > 2) {
-    fprintf(stderr, "Usage: %s [iterations_per_case]\n", argv[0]);
+  int decode, core = argc == 3;
+  if(argc > 3 || (core && strcmp(argv[2], "--core"))) {
+    fprintf(stderr, "Usage: %s [iterations_per_case] [--core]\n", argv[0]);
     return 1;
   }
-  if(argc == 2) {
+  if(argc >= 2) {
     char *end;
     unsigned long long parsed;
     errno = 0;
@@ -121,11 +121,19 @@ int main(int argc, char **argv)
       ++length_index)
     for(pattern = 0; pattern < 3; ++pattern)
       for(flags = 0; flags < 2; ++flags)
-        for(decode = 0; decode < 2; ++decode)
+        for(decode = 0; decode < 2; ++decode) {
+          if(core && !(
+             (lengths[length_index] == 128 && pattern == 1 &&
+              ((!decode && flags == SIMDURL_URI) ||
+               (decode && flags == SIMDURL_FORM))) ||
+             (lengths[length_index] == 4096 && flags == SIMDURL_URI &&
+              ((!decode && pattern == 0) || pattern == 2))))
+            continue;
           if(run_case(lengths[length_index], pattern, decode, flags, iterations)) {
             fputs("Benchmark operation failed\n", stderr);
             return 1;
           }
+        }
   printf("Checksum: %" PRIu64 "\n", checksum);
   return 0;
 }

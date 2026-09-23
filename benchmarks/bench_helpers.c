@@ -208,7 +208,7 @@ static BENCH_NOINLINE double measure(helper_function function,
 
 static int run_case(size_t length, unsigned int pattern,
                     enum operation operation, const struct fixed_case *fixed,
-                    size_t iterations)
+                    size_t iterations, int core)
 {
   static const char *const operations[] = {
     "ascii_copy", "ascii_inplace_already_lowered", "hex_lower", "hex_upper"
@@ -240,13 +240,16 @@ static int run_case(size_t length, unsigned int pattern,
         return 1;
     }
     if(validate_outputs(input, output, length, operation) ||
-       measure(functions[variant], input, output, length, operation, 1000) < 0)
+       ((!core || variant) &&
+        measure(functions[variant], input, output, length, operation, 1000) < 0))
       return 1;
   }
   for(repeat = 0; repeat < REPEATS; ++repeat) {
     for(order = 0; order < 2; ++order) {
       double ns;
       variant = (order + repeat) % 2;
+      if(core && !variant)
+        continue;
       prepare_outputs(input, output, length, operation);
       /* Initialize every output row even when iterations < INPUT_COUNT. */
       for(row = 0; row < INPUT_COUNT; ++row) {
@@ -274,11 +277,12 @@ int main(int argc, char **argv)
   };
   size_t iterations = 100000, length_index;
   unsigned int pattern, operation;
-  if(argc > 2) {
-    fprintf(stderr, "Usage: %s [iterations_per_sample]\n", argv[0]);
+  int core = argc == 3;
+  if(argc > 3 || (core && strcmp(argv[2], "--core"))) {
+    fprintf(stderr, "Usage: %s [iterations_per_sample] [--core]\n", argv[0]);
     return 1;
   }
-  if(argc == 2) {
+  if(argc >= 2) {
     char *end;
     unsigned long long parsed;
     errno = 0;
@@ -303,8 +307,9 @@ int main(int argc, char **argv)
   puts("# fixed hex wrappers expose constant lengths and case to both variants");
   puts("# inplace inputs are already lowercased before timing; no input-reset cost included");
   puts("# checksums, output sampling and call overhead are included in both timings");
-  printf("# %lu iterations/sample; %u alternating samples; CPU time; ns/operation\n",
-         (unsigned long)iterations, (unsigned int)REPEATS);
+  printf("# %lu iterations/sample; %u %ssamples; CPU time; ns/operation\n",
+         (unsigned long)iterations, (unsigned int)REPEATS,
+         core ? "" : "alternating ");
   puts("operation,pattern,bytes,length_kind,variant,sample,ns_per_op");
   for(length_index = 0; length_index < sizeof(lengths) / sizeof(lengths[0]);
       ++length_index)
@@ -312,16 +317,23 @@ int main(int argc, char **argv)
       for(pattern = 0; pattern < (operation >= HEX_LOWER ? 1U : 3U); ++pattern) {
         if(!lengths[length_index] && pattern)
           continue;
+        if(core && !(
+           (operation == ASCII_COPY && !pattern && lengths[length_index] == 128) ||
+           (operation == HEX_LOWER && lengths[length_index] == 4096)))
+          continue;
         if(run_case(lengths[length_index], pattern, (enum operation)operation,
-                    NULL, iterations))
+                    NULL, iterations, core))
           goto failure;
       }
   for(length_index = 0;
       length_index < sizeof(fixed_cases) / sizeof(fixed_cases[0]); ++length_index)
-    for(operation = HEX_LOWER; operation <= HEX_UPPER; ++operation)
+    for(operation = HEX_LOWER; operation <= HEX_UPPER; ++operation) {
+      if(core && !(operation == HEX_LOWER && fixed_cases[length_index].length == 32))
+        continue;
       if(run_case(fixed_cases[length_index].length, 0, (enum operation)operation,
-                  &fixed_cases[length_index], iterations))
+                  &fixed_cases[length_index], iterations, core))
         goto failure;
+    }
   printf("# checksum: %" PRIu64 "\n", checksum);
   return 0;
 failure:
