@@ -8,8 +8,8 @@ GitHub Actions and executes on Bencher's `intel-v1` hosted hardware.
 
 The `benchmark` job uses the GitHub environment named `Benchmarking`. Its
 `BENCHER_SECRET` secret must contain the project's Bencher run key. The workflow
-maps that secret to the CLI's `BENCHER_API_KEY` environment variable only while
-uploading the image and submitting the run. A user API key is not needed in CI.
+maps that secret to the CLI's `BENCHER_API_KEY` environment variable in the
+image build, upload, and benchmark step. A user API key is not needed in CI.
 
 Local `.env` and `.env.*` files are ignored by Git. The Docker build context
 uses an allowlist, and the final image contains only the benchmark executables,
@@ -23,13 +23,19 @@ not publish performance measurements. Publishing is restricted to `main`.
 The first run begins after this workflow reaches `main`. Each push enumerates
 all new **first-parent mainline commits**, including intermediate commits in a
 multi-commit push. Commits inside a merged feature branch are represented by the
-merge commit. Runs are queued without canceling earlier work; each workflow
-runs one benchmark job at a time. GitHub permits up to 100 pending workflows
-with `queue: max`, and up to 256 commits in one matrix.
+merge commit. Runs are queued without canceling earlier work. Within each
+workflow, one job submits commits oldest first and waits for each successful
+report before
+starting the next commit. GitHub permits up to 100 pending workflows with
+`queue: max`. The planner accepts at most 256 commits per run; split long ranges
+to fit the six-hour job limit. The execution step stops after 350 minutes to
+leave time for cleanup and evidence upload.
 
 A failed benchmark is a failed workflow, never a fabricated zero measurement.
-Rerun failed jobs or use the manual range below to recover gaps. Benchmark
-performance does not gate releases; thresholds can be added after collecting
+A failure stops the range before later commits are submitted. Use the manual
+range below to resume after the last successful commit; rerunning the entire
+job repeats any completed observations. Benchmark performance does not gate
+releases; thresholds can be added after collecting
 enough history to characterize ordinary variation.
 
 ## Backfilling and retries
@@ -44,8 +50,15 @@ Choose **Actions → Benchmarks → Run workflow** on `main`:
 
 Endpoints must belong to main's first-parent history. Split ranges larger than
 256 commits. Bencher may retain additional observations when a commit is rerun.
-Backfilled reports retain the requested commit SHA, but charts follow report
-submission order rather than the original commit dates.
+Manual runs retain the requested commit SHA and use its committer timestamp
+for the graph date. Automatic push runs use the measurement date. Bencher
+version numbers still follow the order in which commit hashes were first
+submitted.
+
+The artifact records the selected range in `commits.txt`, per-commit evidence
+in `<SHA>/`, and progress in `last-successful-commit.txt`. To resume a failed
+range, set `since` to the last successful SHA and keep the original `until`.
+If nothing succeeded, repeat the original range.
 
 The harness comes from the workflow revision, while library headers come from
 the requested commit. This holds the workload constant during a backfill.
@@ -62,11 +75,12 @@ preserve the existing reports, and start a fresh Bencher branch head with
 `bencher branch update simdurl main --start-point-reset`. Existing reports remain
 stored under the previous head. Submit one commit at a time, oldest first,
 waiting for each successful report and checking its version and hash before
-continuing. A serialized matrix does not guarantee job scheduling order.
+continuing. The workflow uses an explicit loop because a serialized matrix
+does not guarantee job scheduling order.
 
-For commit-date graphs, add `--backdate` with the commit's committer timestamp
-when submitting each historical run. These are measurements taken now against
-historical source; the job evidence retains the actual measurement timestamps.
+The manual workflow supplies `--backdate` with each commit's committer
+timestamp. Supply the same option when submitting historical runs locally.
+These are measurements taken now against historical source; the job evidence retains the actual measurement timestamps.
 Restore automatic submissions after catching up to the current main tip.
 
 ## Measurement contract

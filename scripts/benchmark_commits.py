@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select every first-parent commit in a push for a GitHub Actions matrix."""
+"""Select every first-parent commit in a push for an ordered benchmark run."""
 
 import argparse
 import json
@@ -78,8 +78,8 @@ def plan_commits(repository, before, after, main_head=None):
     ).stdout.splitlines()
     if len(commits) > MAX_COMMITS:
         raise CommitRangeError(
-            f"Range contains {len(commits)} commits; GitHub Actions permits at most "
-            f"{MAX_COMMITS} matrix entries. Split the range into smaller ranges."
+            f"Range contains {len(commits)} commits; the benchmark planner permits at most "
+            f"{MAX_COMMITS} commits per run. Split the range into smaller ranges."
         )
     return commits
 

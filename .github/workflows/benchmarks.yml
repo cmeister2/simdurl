@@ -74,66 +74,78 @@ jobs:
     if: needs.commits.outputs.count != '0'
     runs-on: ubuntu-24.04
     environment: Benchmarking
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix: ${{ fromJSON(needs.commits.outputs.matrix) }}
-    env:
-      SOURCE_SHA: ${{ matrix.commit }}
+    timeout-minutes: 360
     steps:
-      - name: Check out the benchmark harness
+      - name: Check out the benchmark harness and source history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: harness
-          persist-credentials: false
-      - name: Check out the library revision under test
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ matrix.commit }}
-          path: source
+          fetch-depth: 0
           persist-credentials: false
       - name: Install Bencher
         uses: bencherdev/bencher@8d75325c3bc59403a2186a056b472c4f49d42838 # v0.6.12
         with:
           version: 0.6.12
-      - name: Build the benchmark image
-        run: |
-          printf 'DOCKER_CONFIG=%s\n' "$RUNNER_TEMP/bencher-docker" >> "$GITHUB_ENV"
-          mkdir -p evidence "$RUNNER_TEMP/benchmark-context"
-          cp -R source/include harness/benchmarks harness/scripts "$RUNNER_TEMP/benchmark-context/"
-          image="registry.bencher.dev/simdurl:${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker build --platform linux/amd64 \
-            --file "$RUNNER_TEMP/benchmark-context/benchmarks/bencher/Dockerfile" \
-            --build-arg "SOURCE_SHA=$SOURCE_SHA" --tag "$image" "$RUNNER_TEMP/benchmark-context"
-          printf 'BENCHER_IMAGE=%s\n' "$image" >> "$GITHUB_ENV"
-          git -C harness rev-parse HEAD > evidence/harness-sha.txt
-      - name: Upload the image and run on Bencher hardware
+      - name: Run commits in chronological order
+        # Leave time for credential cleanup and evidence upload on timeout.
+        timeout-minutes: 350
+        shell: bash
         env:
           BENCHER_API_KEY: ${{ secrets.BENCHER_SECRET }}
+          COMMIT_PLAN: ${{ needs.commits.outputs.matrix }}
+          BACKDATE: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
+          set -euo pipefail
           test -n "$BENCHER_API_KEY"
+          export DOCKER_CONFIG="$RUNNER_TEMP/bencher-docker"
+          printf 'DOCKER_CONFIG=%s\n' "$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          mkdir -p evidence
+          jq -er '.commit[]' <<< "$COMMIT_PLAN" > evidence/commits.txt
           printf '%s' "$BENCHER_API_KEY" | docker login registry.bencher.dev --username simdurl --password-stdin
-          docker push "$BENCHER_IMAGE"
-          image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$BENCHER_IMAGE")
-          printf '%s\n' "$image" > evidence/image.txt
-          status=0
-          bencher run --project simdurl --branch main --hash "$SOURCE_SHA" \
-            --testbed intel-v1-gcc14-v1 --spec intel-v1 --adapter json \
-            --image "$image" --job-timeout 300 --format json --quiet > evidence/report.json 2> >(tee evidence/bencher.log >&2) || status=$?
-          if job=$(jq -er '.job // empty' evidence/report.json); then
-            bencher job view simdurl "$job" > evidence/job.json || status=1
-          fi
-          test "$status" -eq 0
-          printf 'Bencher recorded commit `%s`. [Benchmark history](https://bencher.dev/perf/simdurl)\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          context="$RUNNER_TEMP/benchmark-context"
+          while IFS= read -r SOURCE_SHA <&3; do
+            echo "::group::Benchmark $SOURCE_SHA"
+            evidence="evidence/$SOURCE_SHA"
+            mkdir -p "$evidence"
+            rm -rf "$context"
+            mkdir -p "$context"
+            git -C harness archive "$SOURCE_SHA" include | tar -x -C "$context"
+            git -C harness archive HEAD benchmarks scripts | tar -x -C "$context"
+            git -C harness rev-parse HEAD > "$evidence/harness-sha.txt"
+            image="registry.bencher.dev/simdurl:${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            docker build --platform linux/amd64 \
+              --file "$context/benchmarks/bencher/Dockerfile" \
+              --build-arg "SOURCE_SHA=$SOURCE_SHA" --tag "$image" "$context"
+            docker push "$image"
+            image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")
+            printf '%s\n' "$image" > "$evidence/image.txt"
+            backdate=()
+            if [[ "$BACKDATE" == true ]]; then
+              backdate=(--backdate "$(git -C harness show -s --format=%ct "$SOURCE_SHA")")
+            fi
+            status=0
+            bencher run --project simdurl --branch main --hash "$SOURCE_SHA" \
+              --testbed intel-v1-gcc14-v1 --spec intel-v1 --adapter json \
+              "${backdate[@]}" --image "$image" --job-timeout 300 --format json --quiet \
+              > "$evidence/report.json" 2> >(tee "$evidence/bencher.log" >&2) || status=$?
+            if job=$(jq -er '.job // empty' "$evidence/report.json"); then
+              bencher job view simdurl "$job" > "$evidence/job.json" || status=1
+            else
+              status=1
+            fi
+            test "$status" -eq 0
+            printf '%s\n' "$SOURCE_SHA" > evidence/last-successful-commit.txt
+            printf 'Bencher recorded commit `%s`. [Benchmark history](https://bencher.dev/perf/simdurl)\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+            echo '::endgroup::'
+          done 3< evidence/commits.txt
       - name: Remove temporary registry credentials
         if: always()
-        run: rm -rf "$DOCKER_CONFIG"
+        run: rm -rf "$RUNNER_TEMP/bencher-docker"
       - name: Retain the report and raw measurement evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: benchmarks-${{ matrix.commit }}-${{ github.run_attempt }}
+          name: benchmarks-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/
           if-no-files-found: ignore
           retention-days: 90
