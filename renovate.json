@@ -1,5 +1,22 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["github>cmeister2/renovate"],
-  "semanticCommits": "enabled"
+  "semanticCommits": "enabled",
+  "packageRules": [
+    {
+      "description": "Test conventional commits tooling upgrades together before merging.",
+      "matchPackageNames": [
+        "conventional-changelog-conventionalcommits",
+        "@semantic-release/commit-analyzer",
+        "@semantic-release/release-notes-generator"
+      ],
+      "groupName": "conventional commits tooling",
+      "groupSlug": "conventional-commits-tooling",
+      "groupSingleUpdates": true,
+      "separateMajorMinor": false,
+      "ignoreUnstable": true,
+      "automerge": false,
+      "rebaseWhen": "behind-base-branch"
+    }
+  ]
 }
