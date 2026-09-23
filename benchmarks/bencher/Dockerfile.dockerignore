@@ -4,6 +4,8 @@
 !include/**
 !src/
 !src/simdurl.c
+!tests/
+!tests/test_backends.c
 !benchmarks/
 !benchmarks/bench.c
 !benchmarks/bench_validate.c
