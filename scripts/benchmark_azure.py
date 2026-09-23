@@ -62,6 +62,17 @@ def command(arguments, *, timeout=180, stdout=None):
     return result.stdout or b""
 
 
+def disposable_public_key():
+    """Satisfy VM provisioning without retaining an SSH login credential."""
+    with tempfile.TemporaryDirectory(prefix="simdurl-ssh-") as directory:
+        key = Path(directory) / "id_ed25519"
+        command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", str(key)],
+                timeout=30)
+        public_key = key.with_suffix(".pub").read_text().strip()
+    # Run Command uses the Azure VM agent; neither SSH key file is needed again.
+    return public_key
+
+
 def finite_budget_number(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
@@ -74,7 +85,7 @@ def finite_budget_number(value):
 def config_from(value, *, validate_budget=True):
     data = json.loads(value if value.lstrip().startswith("{") else Path(value).read_text())
     for field in ("subscription_id", "resource_group", "location", "storage_account",
-                  "image_version", "admin_public_key"):
+                  "image_version"):
         if not isinstance(data.get(field), str) or not data[field]:
             raise ValueError(f"configuration requires {field}")
     expected_resource_ids("simdurl-config", data["subscription_id"], data["resource_group"])
@@ -84,8 +95,8 @@ def config_from(value, *, validate_budget=True):
         raise ValueError("invalid Azure location")
     if not re.fullmatch(r"\d+\.\d+\.\d+", data["image_version"]):
         raise ValueError("image_version must be a concrete three-part marketplace version")
-    if not data["admin_public_key"].startswith(("ssh-rsa ", "ssh-ed25519 ")):
-        raise ValueError("admin_public_key must contain an SSH public key")
+    # Accept old configurations without carrying a personal key into a new run.
+    data.pop("admin_public_key", None)
     lifetime = data.setdefault("lifetime_minutes", 60)
     if isinstance(lifetime, bool) or not isinstance(lifetime, int) or not 60 <= lifetime <= 120:
         raise ValueError("lifetime_minutes must be an integer between 60 and 120")
@@ -593,10 +604,12 @@ def run_with_lease(azure, args):
         manifest = registered
         (output / "run.json").write_text(json.dumps(manifest, indent=2) + "\n")
         command_body = prepare_command(azure, manifest, input_hash, smoke=args.smoke)
+        ensure_lease(azure)
+        public_key = disposable_public_key()
         print(f"Allocating Standard_D2s_v6 in {azure.config['location']}", flush=True)
         with tempfile.TemporaryDirectory(prefix="simdurl-parameters-") as tmp:
             parameters = {"location": azure.config["location"], "runId": args.run_id,
-                          "expiresAt": manifest["expires_at"], "adminPublicKey": azure.config["admin_public_key"],
+                          "expiresAt": manifest["expires_at"], "adminPublicKey": public_key,
                           "imageVersion": azure.config["image_version"]}
             path = Path(tmp) / "parameters.json"
             path.write_text(json.dumps({"parameters": {k: {"value": v} for k, v in parameters.items()}}))

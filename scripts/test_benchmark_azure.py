@@ -24,7 +24,7 @@ def configuration():
     return {
         "subscription_id": SUBSCRIPTION, "resource_group": "benchmark-compute",
         "location": "northeurope", "storage_account": "simdurlteststorage",
-        "image_version": "24.04.202609010", "admin_public_key": "ssh-ed25519 AAAATEST",
+        "image_version": "24.04.202609010",
     }
 
 
@@ -78,6 +78,16 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     azure.config_from(json.dumps(configuration() | changes))
 
+    def test_personal_key_is_unneeded_and_discarded_from_legacy_config(self):
+        for validate_budget in (True, False):
+            with self.subTest(validate_budget=validate_budget):
+                current = azure.config_from(json.dumps(configuration()), validate_budget=validate_budget)
+                legacy = azure.config_from(json.dumps(configuration() | {
+                    "admin_public_key": "ssh-ed25519 AAAAPERSONAL user@laptop",
+                }), validate_budget=validate_budget)
+                self.assertEqual(legacy, current)
+                self.assertNotIn("admin_public_key", legacy)
+
     def test_redacts_signed_urls(self):
         self.assertNotIn("sig=private", azure.redact("download https://x.blob.core.windows.net/a/b?sig=private failed"))
 
@@ -104,6 +114,39 @@ class ConfigTests(unittest.TestCase):
                 client.write_json("runs", "fixture.json", {"status": status})
         self.assertEqual(documents, [(status, f"status={status}") for status in
                                      ("registered", "cleanup_pending", "cleaned")])
+
+
+class DisposableKeyTests(unittest.TestCase):
+    def test_only_public_half_survives_generation(self):
+        paths = []
+
+        def keygen(arguments, **kwargs):
+            key = Path(arguments[arguments.index("-f") + 1])
+            self.assertEqual(arguments[arguments.index("-C") + 1], "")
+            self.assertEqual(arguments[arguments.index("-N") + 1], "")
+            key.write_text("private key fixture")
+            key.with_suffix(".pub").write_text("ssh-ed25519 AAAADISPOSABLE \n")
+            paths.extend((key, key.with_suffix(".pub"), key.parent))
+            return b""
+
+        with mock.patch.object(azure, "command", side_effect=keygen):
+            public_key = azure.disposable_public_key()
+        self.assertEqual(public_key, "ssh-ed25519 AAAADISPOSABLE")
+        self.assertTrue(all(not path.exists() for path in paths))
+
+    def test_generation_failure_removes_partial_private_key(self):
+        paths = []
+
+        def fail(arguments, **kwargs):
+            key = Path(arguments[arguments.index("-f") + 1])
+            key.write_text("partial private key fixture")
+            paths.extend((key, key.parent))
+            raise azure.AzureError("generation failed")
+
+        with mock.patch.object(azure, "command", side_effect=fail):
+            with self.assertRaisesRegex(azure.AzureError, "generation failed"):
+                azure.disposable_public_key()
+        self.assertTrue(all(not path.exists() for path in paths))
 
 
 class BudgetTests(unittest.TestCase):

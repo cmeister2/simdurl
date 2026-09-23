@@ -166,7 +166,7 @@ subscription, a region with D2s_v6 capacity/quota and Functions Flex Consumption
 support, a globally unique storage account name, and a budget alert email
 destination. The same email can receive optional cleanup-error and missing-heartbeat alerts.
 
-Install Azure CLI with Bicep support, Python 3.11 or newer, Docker, GitHub CLI,
+Install Azure CLI with Bicep support, Python 3.11 or newer, Docker, GitHub CLI, OpenSSH's `ssh-keygen`,
 and `jq` for these examples. Choose the values below; keep generated config and
 setup outputs outside the checkout.
 
@@ -308,8 +308,18 @@ to be covered by this filter.
 Write a local JSON configuration, replacing every placeholder. `resource_group`
 is the compute group; `control_resource_group` identifies the persistent resources
 covered by the budget. `storage_account` is the evidence account from that control
-deployment. `admin_public_key` contains the public key text, not a filename.
-The VM requires this key to provision, although inbound SSH is blocked.
+deployment. No personal SSH key belongs in this configuration. Each allocation
+generates a comment-free Ed25519 key in a temporary directory, reads its public
+half, and deletes both files before deployment. Only the public half is passed
+to Bicep's secure provisioning parameter. The controller uses Azure Run Command,
+so it never needs SSH access; inbound SSH remains blocked.
+
+For migration, the controller accepts and discards an old `admin_public_key`
+field. The live config temporarily retains a disposable public key for older
+workflow revisions, which still require that field even for cleanup. Its private
+half has been deleted, and it contains no personal identity comment. New configs
+should omit the field. GitHub variables are printed unmasked, so they must not
+contain private keys or other credentials.
 
 ```json
 {
@@ -319,7 +329,6 @@ The VM requires this key to provision, although inbound SSH is blocked.
   "location": "<region>",
   "storage_account": "<storage-account-name>",
   "image_version": "<concrete-three-part-version>",
-  "admin_public_key": "ssh-ed25519 <public-key-data>",
   "lifetime_minutes": 60,
   "budget": {
     "name": "simdurl-benchmark-monthly",
