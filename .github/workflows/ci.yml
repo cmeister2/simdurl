@@ -28,6 +28,7 @@ jobs:
             os: ubuntu-24.04
             cc: gcc
             cxx: g++
+            flags: -fsigned-char
             options: -DSIMDURL_TEST_REQUIRE_BACKEND=sse2
           - name: Linux Clang shared
             os: ubuntu-24.04
@@ -50,12 +51,6 @@ jobs:
             cxx: clang++
             flags: -fno-vectorize -fno-slp-vectorize
             options: -DSIMDURL_DISABLE_SIMD=ON -DSIMDURL_TEST_REQUIRE_BACKEND=portable
-          - name: Linux GCC signed char
-            os: ubuntu-24.04
-            cc: gcc
-            cxx: g++
-            flags: -fsigned-char
-            options: ''
           - name: Linux GCC unsigned char
             os: ubuntu-24.04
             cc: gcc
@@ -160,16 +155,8 @@ jobs:
           -DCMAKE_C_FLAGS="-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-sanitize-recover=all -fPIE -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=memory -pie"
       - name: Build C targets
-        run: >-
-          cmake --build build --parallel --target
-          simdurl_test simdurl_test_header_only simdurl_test_scalar
-          simdurl_test_scanner simdurl_test_scanner_header_only simdurl_test_scanner_scalar
-          simdurl_test_contract simdurl_test_contract_header_only simdurl_test_contract_scalar
-          simdurl_test_memory simdurl_test_memory_header_only simdurl_test_memory_scalar
-          simdurl_test_backends
-          simdurl_test_literals simdurl_test_literals_header_only simdurl_test_literals_scalar
-          simdurl_test_literal_complexity
-      - run: ctest --test-dir build --verbose --output-on-failure -E 'cpp|install_consumer'
+        run: cmake --build build --parallel --target simdurl_tests_c
+      - run: ctest --test-dir build --verbose --output-on-failure --no-tests=error -L '^c$'
       - name: Retain MemorySanitizer reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -284,29 +271,10 @@ jobs:
     name: AVX-512 VBMI2 emulation
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      SDE_SHA256: 94e97d623fec54385686e1e7ba65ebc9941748c05ee451423948334892bf2b50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Cache Intel SDE archive
-        id: sde-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/simdurl-sde/sde.tar.xz
-          key: intel-sde-linux-10.13.1-94e97d623fec5438
-      - name: Download Intel SDE
-        if: steps.sde-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p "$RUNNER_TEMP/simdurl-sde"
-          wget --https-only --tries=3 --timeout=30 \
-            --output-document="$RUNNER_TEMP/simdurl-sde/sde.tar.xz" \
-            https://downloadmirror.intel.com/924984/sde-external-10.13.1-2026-07-28-lin.tar.xz
-      - name: Verify and extract Intel SDE
-        run: |
-          cd "$RUNNER_TEMP/simdurl-sde"
-          printf '%s  sde.tar.xz\n' "$SDE_SHA256" | sha256sum --check
-          mkdir -p kit
-          tar -xJf sde.tar.xz -C kit --strip-components=1
+      - name: Set up Intel SDE
+        uses: petarpetrovt/setup-sde@6d2773bc0ef3005fd52e0ae0bb91782321793aec # v6.0
       - name: Configure required VBMI2 tests
         env:
           CC: gcc
@@ -321,7 +289,7 @@ jobs:
         run: |
           # Intel SDE needs ptrace in this temporary runner VM.
           sudo sysctl -w kernel.yama.ptrace_scope=0
-          "$RUNNER_TEMP/simdurl-sde/kit/sde64" -icx -- \
+          "$SDE_PATH/sde64" -icx -- \
             ./build/tests/simdurl_test_backends --require=vbmi2 2>&1 | tee build/vbmi2-execution.log
       - name: Retain emulated backend execution reports
         if: always()
@@ -360,12 +328,6 @@ jobs:
   release:
     name: Semantic release
     needs: [build, sanitizers, memory-sanitizer, fuzz, coverage, vbmi2, source-package]
-    if: >-
-      always() && !cancelled() &&
-      needs.build.result == 'success' && needs.sanitizers.result == 'success' &&
-      needs.memory-sanitizer.result == 'success' && needs.fuzz.result == 'success' &&
-      needs.coverage.result == 'success' && needs.vbmi2.result == 'success' &&
-      needs.source-package.result == 'success'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -399,20 +361,6 @@ jobs:
     steps:
       - name: Require all jobs to pass
         env:
-          BUILD_RESULT: ${{ needs.build.result }}
-          SANITIZERS_RESULT: ${{ needs.sanitizers.result }}
-          MEMORY_SANITIZER_RESULT: ${{ needs.memory-sanitizer.result }}
-          FUZZ_RESULT: ${{ needs.fuzz.result }}
-          COVERAGE_RESULT: ${{ needs.coverage.result }}
-          VBMI2_RESULT: ${{ needs.vbmi2.result }}
-          SOURCE_PACKAGE_RESULT: ${{ needs.source-package.result }}
-          RELEASE_RESULT: ${{ needs.release.result }}
-        run: |
-          test "$BUILD_RESULT" = "success"
-          test "$SANITIZERS_RESULT" = "success"
-          test "$MEMORY_SANITIZER_RESULT" = "success"
-          test "$FUZZ_RESULT" = "success"
-          test "$COVERAGE_RESULT" = "success"
-          test "$VBMI2_RESULT" = "success"
-          test "$SOURCE_PACKAGE_RESULT" = "success"
-          test "$RELEASE_RESULT" = "success"
+          NEEDS_RESULTS: ${{ toJSON(needs) }}
+        shell: bash
+        run: jq -e 'all(.[]; .result == "success")' <<< "$NEEDS_RESULTS"
