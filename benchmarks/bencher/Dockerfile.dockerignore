@@ -1,0 +1,14 @@
+# An allowlist also keeps local .env files out of the uploaded build context.
+**
+!include/
+!include/**
+!benchmarks/
+!benchmarks/bench.c
+!benchmarks/bench_validate.c
+!benchmarks/bencher/
+!benchmarks/bencher/Dockerfile
+!benchmarks/bencher/Dockerfile.dockerignore
+!benchmarks/bencher/backend_info.c
+!benchmarks/bencher/run.py
+!scripts/
+!scripts/benchmark.py

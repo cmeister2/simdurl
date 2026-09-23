@@ -240,6 +240,9 @@ whole buffer. An optional argument sets iterations per sample (default 100000).
 The `_scalar` target disables explicit SIMD, while compiler vectorization remains
 permitted. Measurements use header-only calls with constant check flags.
 
+The [historical benchmarking guide](docs/benchmarking.md) describes the Bencher
+workflow, per-commit results, manual backfills, and local verification.
+
 ## Releases
 
 [GitHub Releases](https://github.com/cmeister2/simdurl/releases) provides source
