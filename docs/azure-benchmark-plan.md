@@ -18,7 +18,8 @@ Status: live qualification of the current GCC 15.2.0 core profile passed,
 including native VBMI2 checks, evidence validation, resource deletion, and
 Bencher publication. An independent running-VM recovery drill also passed. Monthly cost
 controls and alerts are deployed and verified; the GitHub enable variable is
-`true`. The workflow changes must reach `main` before automatic Azure runs start.
+`true`. The first automatic run authenticated through GitHub OIDC in cleanup;
+full automatic execution remains to be verified after the image export correction.
 The agreed operating budget is **USD 100 per calendar month for
 all Azure benchmarking resources**. The subscription bills in GBP, so its Azure
 budget is set to **GBP 60 per month**, with new allocations stopped at **GBP 48**
@@ -64,8 +65,9 @@ The controller, guest, exporter, and lifecycle checks passed 132 unit
 tests; workflow lint and Bicep compilation also passed. Local GCC 15 container
 checks passed the ten-metric core profile at normal iteration counts and a
 1,356-metric full-suite smoke test. Local qualification used the
-operator identity. The first automatic GitHub OIDC, artifact transfer, and
-publication execution remains to be verified after the workflow is merged.
+operator identity. GitHub OIDC authentication and artifact transfer have since
+passed on `main`; automatic allocation, measurement, and publication remain to
+be verified after the image export correction.
 
 ```mermaid
 flowchart LR
@@ -107,6 +109,16 @@ normal iteration counts. The Azure controller accepts only this core profile.
 The benchmark harness separately supports `--suite full` for local diagnostic
 runs of 1,356 series across ten executables, including scalar and compiled builds.
 The native VBMI2 correctness gate is unchanged by the smaller measurement set.
+
+The pinned `docker/build-push-action` builds Azure images with `load: true` and
+`provenance: false` so Docker exports exactly one executable image. Local builds
+use the equivalent `--provenance=false`. Docker's default provenance adds a
+separate attestation manifest when the builder uses the containerd image store;
+the archive validator deliberately
+requires a single image. PR tooling now validates the actual saved archive on the
+hosted runner, and the Azure build repeats that validation before upload. Source
+and harness SHAs, archive hashes, and image identities remain in the run evidence.
+[Docker attestation behavior](https://docs.docker.com/build/metadata/attestations/).
 
 `SIMDURL_BENCH_REQUIRE_VBMI2=1` requires both automatic encode and decode dispatch
 to select VBMI2. The image then executes the native backend tests with
@@ -362,7 +374,7 @@ Then build the same image and run a reduced workload for the checked-out commit:
 BENCH_SOURCE_SHA="$(git rev-parse HEAD)"
 BENCH_HARNESS_SHA="$BENCH_SOURCE_SHA"
 BENCH_RUN_ID="simdurl-local-$(date -u +%Y%m%d%H%M%S)"
-docker build --platform linux/amd64 --file benchmarks/bencher/Dockerfile \
+docker build --platform linux/amd64 --provenance=false --file benchmarks/bencher/Dockerfile \
   --build-arg "SOURCE_SHA=$BENCH_SOURCE_SHA" --tag simdurl-azure:local .
 python3 scripts/benchmark_azure.py run --config "$BENCH_SETUP_DIR/azure-config.json" \
   --image simdurl-azure:local --commit "$BENCH_SOURCE_SHA" \
@@ -431,8 +443,10 @@ image-build job uses no GitHub environment and has no OIDC permission.
 
 Each push uses the existing commit matrix, including intermediate first-parent
 commits in a multi-commit push. Azure matrix jobs run sequentially and existing
-main-branch workflow concurrency queues pushes. Pull requests only validate
-tooling and containers. No manual launch is needed for the Azure lane. The
+main-branch workflow concurrency queues pushes. Pull requests run only the
+separate [Benchmark checks workflow](../.github/workflows/benchmark-tooling.yml),
+which validates tooling and containers. The main benchmark workflow calls the
+same validation before allocating resources. No manual launch is needed for the Azure lane. The
 existing historical backfill facility remains available for recovering gaps.
 
 Publication reads saved `results.json` with Bencher's file adapter and records
