@@ -83,6 +83,39 @@ SIMDURL_DETAIL_INLINE unsigned int simdurl_detail_hex(unsigned char c)
   return values[c];
 }
 
+/* Read both ends before storing: an in-place decoded span can overlap its
+ * destination. Fixed-width copies cover only bytes within the literal span. */
+SIMDURL_DETAIL_INLINE void simdurl_detail_copy_literals(char *output,
+                                                       const char *input,
+                                                       size_t length)
+{
+  if(length == 1)
+    *output = *input;
+  else if(length > 16)
+    memmove(output, input, length);
+  else if(length >= 8) {
+    uint64_t first, last;
+    memcpy(&first, input, sizeof(first));
+    memcpy(&last, input + length - sizeof(last), sizeof(last));
+    memcpy(output, &first, sizeof(first));
+    memcpy(output + length - sizeof(last), &last, sizeof(last));
+  }
+  else if(length >= 4) {
+    uint32_t first, last;
+    memcpy(&first, input, sizeof(first));
+    memcpy(&last, input + length - sizeof(last), sizeof(last));
+    memcpy(output, &first, sizeof(first));
+    memcpy(output + length - sizeof(last), &last, sizeof(last));
+  }
+  else if(length >= 2) {
+    uint16_t first, last;
+    memcpy(&first, input, sizeof(first));
+    memcpy(&last, input + length - sizeof(last), sizeof(last));
+    memcpy(output, &first, sizeof(first));
+    memcpy(output + length - sizeof(last), &last, sizeof(last));
+  }
+}
+
 /* Initialize *next_percent to the span start, then reuse it only while
  * consuming successive literal runs from that span. Cache the next percent
  * marker (or the span end) so each percent search covers new input. Plus
