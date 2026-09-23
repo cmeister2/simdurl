@@ -1,5 +1,5 @@
 # Keep compiler and runtime changes in a new Bencher testbed/harness version.
-FROM gcc:14.3.0-bookworm@sha256:5e927c284bf55a7dc796262e311a0703344f62f41f5621eb56843111b1d37e15 AS build
+FROM gcc:15.2.0-bookworm@sha256:9ca91b05c7b07d2979f16413e8b2cd6ec8a7c80ffca4121ccab0aeba33f90460 AS build
 WORKDIR /src
 COPY include/ include/
 COPY benchmarks/bench.c benchmarks/bench_validate.c benchmarks/bench_formscan.c benchmarks/bench_helpers.c benchmarks/bencher/backend_info.c ./
