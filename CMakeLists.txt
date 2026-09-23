@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(simdurl VERSION 0.0.0 DESCRIPTION "SIMD URL encoding, decoding and byte validation" LANGUAGES C)
+project(simdurl VERSION 0.0.0 DESCRIPTION "SIMD byte operations for URL and protocol processing" LANGUAGES C)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

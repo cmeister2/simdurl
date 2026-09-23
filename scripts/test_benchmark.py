@@ -81,6 +81,45 @@ def formscan_output(build="automatic", iterations=100000):
     return "\n".join(lines) + "\n"
 
 
+def helpers_output(build="automatic", iterations=100000):
+    backend = {
+        "automatic": "automatic CPU selection (header-only)",
+        "scalar": "portable C header-only; compiler-generated SIMD permitted",
+        "compiled": "compiled library; configured library CPU selection applies",
+    }[build]
+    lines = [
+        f"# simdurl: {backend}",
+        "# comparators: independent portable C; optimization and vectorization enabled",
+        "# comparators assume valid arguments; simdurl includes API argument checks",
+        "# both variants use noinline wrappers; compiled simdurl retains a separate API boundary",
+        "# fixed hex wrappers expose constant lengths and case to both variants",
+        "# inplace inputs are already lowercased before timing; no input-reset cost included",
+        "# checksums, output sampling and call overhead are included in both timings",
+        f"# {iterations} iterations/sample; 5 alternating samples; CPU time; ns/operation",
+        "operation,pattern,bytes,length_kind,variant,sample,ns_per_op",
+    ]
+
+    def append_case(operation, pattern, length, kind):
+        for sample in (1, 3, 5, 2, 4):
+            variants = ("portable_C_comparator", "simdurl")
+            for variant in variants[::1 if sample % 2 else -1]:
+                timing = sample + (10.5 if variant == "portable_C_comparator" else 0.5)
+                lines.append(f"{operation},{pattern},{length},{kind},{variant},{sample},{timing:.3f}")
+
+    for length in (0, 1, 8, 15, 16, 17, 20, 31, 32, 33, 48, 63, 64, 65, 128, 512, 4096):
+        for operation in ("ascii_copy", "ascii_inplace_already_lowered", "hex_lower", "hex_upper"):
+            patterns = (("binary",) if operation.startswith("hex_") else
+                        ("mixed_ascii", "unchanged_ascii", "high_bytes"))
+            for pattern in patterns:
+                if length or pattern in ("mixed_ascii", "binary"):
+                    append_case(operation, pattern, length, "runtime")
+    for length in (16, 20, 32, 64):
+        for operation in ("hex_lower", "hex_upper"):
+            append_case(operation, "binary", length, "fixed")
+    lines.append("# checksum: 901234")
+    return "\n".join(lines) + "\n"
+
+
 class ParserTests(unittest.TestCase):
     def test_codec_converts_milliseconds_to_ns_per_operation(self):
         samples, checksum = benchmark.parse_codec(codec_output(), "automatic", 10000)
@@ -148,6 +187,65 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(benchmark.BenchmarkError):
             benchmark.parse_formscan(formscan_output("scalar"), "automatic", 100000)
 
+    def test_helpers_preserve_full_runtime_fixed_and_comparator_matrix(self):
+        results = {}
+        for build in ("automatic", "scalar", "compiled"):
+            samples, observed_checksum = benchmark.parse_helpers(helpers_output(build), build, 100000)
+            self.assertEqual(observed_checksum, 901234)
+            self.assertEqual(len(samples), 280)
+            self.assertEqual(sum(len(values) for values in samples.values()), 1400)
+            self.assertEqual(samples[f"helpers/ascii_copy/mixed_ascii/0/runtime/simdurl/{build}"],
+                             [1.5, 2.5, 3.5, 4.5, 5.5])
+            self.assertEqual(samples[f"helpers/hex_lower/binary/64/fixed/portable_C_comparator/{build}"],
+                             [11.5, 12.5, 13.5, 14.5, 15.5])
+            self.assertNotIn(f"helpers/ascii_copy/high_bytes/0/runtime/simdurl/{build}", samples)
+            self.assertNotIn(f"helpers/ascii_copy/mixed_ascii/16/fixed/simdurl/{build}", samples)
+            for length in (63, 64, 65):
+                self.assertIn(f"helpers/ascii_inplace_already_lowered/high_bytes/{length}/runtime/simdurl/{build}", samples)
+                self.assertIn(f"helpers/hex_upper/binary/{length}/runtime/simdurl/{build}", samples)
+            results.update(samples)
+        self.assertEqual(len(results), 840)
+
+    def test_helpers_reject_other_builds_and_changed_iteration_metadata(self):
+        for expected in ("automatic", "scalar", "compiled"):
+            for actual in ("automatic", "scalar", "compiled"):
+                if actual != expected:
+                    with self.subTest(expected=expected, actual=actual), self.assertRaisesRegex(
+                            benchmark.BenchmarkError, "header, build, or iteration"):
+                        benchmark.parse_helpers(helpers_output(actual), expected, 100000)
+        with self.assertRaisesRegex(benchmark.BenchmarkError, "iteration count"):
+            benchmark.parse_helpers(helpers_output(iterations=100003), "automatic", 100000)
+        self.assertEqual(len(benchmark.parse_helpers(helpers_output(iterations=100003),
+                                                     "automatic", 100003)[0]), 280)
+
+    def test_helpers_reject_changed_matrix_samples_headers_and_checksum(self):
+        lines = helpers_output().splitlines()
+        malformed = {
+            "missing sample": lines[:9] + lines[10:],
+            "duplicate sample": lines[:9] + [lines[9]] + lines[9:],
+            "unknown operation": lines[:9] + [lines[9].replace("ascii_copy", "unknown")] + lines[10:],
+            "unknown pattern": lines[:9] + [lines[9].replace("mixed_ascii", "other")] + lines[10:],
+            "unknown length": lines[:9] + [lines[9].replace(",0,", ",2,")] + lines[10:],
+            "invalid zero pattern": lines[:9] + [lines[9].replace("mixed_ascii", "high_bytes")] + lines[10:],
+            "invalid fixed ASCII": lines[:9] + [lines[9].replace("runtime", "fixed")] + lines[10:],
+            "unknown variant": lines[:9] + [lines[9].replace("portable_C_comparator", "other")] + lines[10:],
+            "invalid sample": lines[:9] + [lines[9].replace(",1,", ",6,")] + lines[10:],
+            "missing field": lines[:9] + [lines[9].rsplit(",", 1)[0]] + lines[10:],
+            "extra field": lines[:9] + [lines[9] + ",extra"] + lines[10:],
+            "invalid CSV": lines[:9] + ['"' + lines[9]] + lines[10:],
+            "changed metadata": lines[:5] + ["# inplace inputs are reset before timing"] + lines[6:],
+            "changed repeat count": lines[:7] + [lines[7].replace("5 alternating", "4 alternating")] + lines[8:],
+            "changed CSV header": lines[:8] + [lines[8].replace("length_kind", "kind")] + lines[9:],
+            "missing checksum": lines[:-1],
+            "malformed checksum": lines[:-1] + ["# checksum: abc"],
+            "trailing output": lines + ["unexpected output"],
+            "missing fixed case": [line for line in lines if not line.startswith("hex_upper,binary,64,fixed,")],
+            "missing whole comparator": [line for line in lines if ",portable_C_comparator," not in line],
+        }
+        for label, rows in malformed.items():
+            with self.subTest(label=label), self.assertRaises(benchmark.BenchmarkError):
+                benchmark.parse_helpers("\n".join(rows), "automatic", 100000)
+
     def test_summary_is_median_and_observed_range(self):
         result = benchmark.bmf({"case": [1000.0, 5.0, 3.0, 4.0, 6.0]})
         self.assertEqual(result, {"case": {"latency": {"value": 5.0, "lower_value": 3.0, "upper_value": 1000.0}}})
@@ -190,6 +288,8 @@ class ParserTests(unittest.TestCase):
                     benchmark.parse_codec(codec_output(elapsed=value), "automatic", 10000)
                 with self.assertRaises(benchmark.BenchmarkError):
                     benchmark.parse_validation(validation_output().replace(",1.500", f",{value}", 1), "automatic", 100000)
+                with self.assertRaises(benchmark.BenchmarkError):
+                    benchmark.parse_helpers(helpers_output().replace(",11.500", f",{value}", 1), "automatic", 100000)
                 for column in (5, 6):
                     lines = formscan_output().splitlines()
                     row = lines[6].split(",")
@@ -206,7 +306,8 @@ class RunnerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
-        for suffix in ("", "_scalar", "_validate", "_validate_scalar", "_formscan", "_formscan_portable", "_formscan_compiled"):
+        for suffix in ("", "_scalar", "_validate", "_validate_scalar", "_formscan", "_formscan_portable", "_formscan_compiled",
+                       "_helpers", "_helpers_portable", "_helpers_compiled"):
             (self.bin_dir / ("simdurl_bench" + suffix)).write_bytes(b"fake benchmark for mocked subprocess")
         self.output_dir = self.root / "results"
 
@@ -224,8 +325,9 @@ class RunnerTests(unittest.TestCase):
         executable = Path(command[0]).name
         build = ("compiled" if executable.endswith("_compiled") else
                  "scalar" if executable.endswith(("_scalar", "_portable")) else "automatic")
-        fixture = (formscan_output if "formscan" in executable
-                   else validation_output if "validate" in executable else codec_output)
+        fixture = (helpers_output if "helpers" in executable else
+                   formscan_output if "formscan" in executable else
+                   validation_output if "validate" in executable else codec_output)
         return subprocess.CompletedProcess(command, 0, fixture(build, int(command[1])), "")
 
     @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
@@ -233,14 +335,18 @@ class RunnerTests(unittest.TestCase):
         status, stdout, stderr = self.invoke()
         self.assertEqual((status, stderr), (0, ""))
         result = json.loads(stdout)
-        self.assertEqual(len(result), 516)
-        legacy = {name: value for name, value in result.items() if not name.startswith("formscan/")}
+        self.assertEqual(len(result), 1356)
+        legacy = {name: value for name, value in result.items() if not name.startswith("helpers/")}
         expected_legacy = {}
         for build in ("automatic", "scalar"):
             codec, _ = benchmark.parse_codec(codec_output(build), build, 10000)
             validation, _ = benchmark.parse_validation(validation_output(build), build, 100000)
             expected_legacy.update(benchmark.bmf(codec))
             expected_legacy.update(benchmark.bmf(validation))
+        for build in ("automatic", "scalar", "compiled"):
+            formscan, _ = benchmark.parse_formscan(formscan_output(build), build, 100000)
+            expected_legacy.update(benchmark.bmf(formscan))
+        self.assertEqual(len(expected_legacy), 516)
         self.assertEqual(legacy, expected_legacy)
         self.assertEqual(result, json.loads((self.output_dir / "results.json").read_text()))
         samples = json.loads((self.output_dir / "samples.json").read_text())
@@ -251,30 +357,119 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(sum(len(values) for name, values in samples.items() if name.startswith("formscan/")), 900)
         metadata = json.loads((self.output_dir / "metadata.json").read_text())
         self.assertEqual(metadata["status"], "complete")
+        self.assertEqual(metadata["harness_version"], 3)
         self.assertEqual(metadata["commit"], "test-commit")
         self.assertEqual(metadata["formscan_iterations"], 100000)
         self.assertEqual(metadata["formscan_repeats"], 5)
         self.assertEqual(metadata["checksums"]["formscan"], 345678)
-        self.assertEqual(len(metadata["executables"]), 7)
+        self.assertEqual(metadata["helper_iterations"], 500000)
+        self.assertEqual(metadata["helper_repeats"], 5)
+        self.assertEqual(metadata["checksums"]["helpers"], 901234)
+        self.assertEqual(samples["helpers/ascii_copy/mixed_ascii/64/runtime/simdurl/compiled"], [1.5, 2.5, 3.5, 4.5, 5.5])
+        self.assertEqual(samples["helpers/hex_upper/binary/64/fixed/simdurl/automatic"], [1.5, 2.5, 3.5, 4.5, 5.5])
+        self.assertEqual(sum(len(values) for name, values in samples.items() if name.startswith("helpers/")), 4200)
+        self.assertEqual(len(metadata["executables"]), 10)
         self.assertEqual(len(metadata["executables"]["simdurl_bench_formscan_portable"]["sha256"]), 64)
         self.assertEqual(len(metadata["executables"]["simdurl_bench_formscan_compiled"]["sha256"]), 64)
-        self.assertEqual(subprocess_run.call_count, 11)
+        self.assertEqual(len(metadata["executables"]["simdurl_bench_helpers_compiled"]["sha256"]), 64)
+        self.assertEqual(subprocess_run.call_count, 14)
         self.assertEqual([run["label"] for run in metadata["runs"]], [
             "codec-automatic-1", "codec-scalar-1", "codec-scalar-2", "codec-automatic-2",
             "codec-automatic-3", "codec-scalar-3", "validate-automatic-1", "validate-scalar-1",
             "formscan-automatic-1", "formscan-scalar-1", "formscan-compiled-1",
+            "helpers-automatic-1", "helpers-scalar-1", "helpers-compiled-1",
         ])
-        self.assertEqual(len(list((self.output_dir / "raw").glob("*.stdout"))), 11)
-        self.assertEqual(len(list((self.output_dir / "raw").glob("*.stderr"))), 11)
+        self.assertEqual(len(list((self.output_dir / "raw").glob("*.stdout"))), 14)
+        self.assertEqual(len(list((self.output_dir / "raw").glob("*.stderr"))), 14)
 
     @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
     def test_formscan_iteration_override_reaches_all_three_processes(self, subprocess_run):
         status, stdout, stderr = self.invoke("--formscan-iterations", "100003")
         self.assertEqual((status, stderr), (0, ""))
-        self.assertEqual(len(json.loads(stdout)), 516)
-        self.assertEqual([call.args[0][1] for call in subprocess_run.call_args_list[-3:]], ["100003"] * 3)
+        self.assertEqual(len(json.loads(stdout)), 1356)
+        calls = [call for call in subprocess_run.call_args_list if "formscan" in Path(call.args[0][0]).name]
+        self.assertEqual([call.args[0][1] for call in calls], ["100003"] * 3)
         metadata = json.loads((self.output_dir / "metadata.json").read_text())
         self.assertEqual(metadata["formscan_iterations"], 100003)
+
+    @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
+    def test_helper_iteration_override_reaches_all_three_processes(self, subprocess_run):
+        status, stdout, stderr = self.invoke("--helper-iterations", "123457")
+        self.assertEqual((status, stderr), (0, ""))
+        self.assertEqual(len(json.loads(stdout)), 1356)
+        calls = [call for call in subprocess_run.call_args_list if "helpers" in Path(call.args[0][0]).name]
+        self.assertEqual([Path(call.args[0][0]).name for call in calls], [
+            "simdurl_bench_helpers", "simdurl_bench_helpers_portable", "simdurl_bench_helpers_compiled",
+        ])
+        self.assertEqual([call.args[0][1] for call in calls], ["123457"] * 3)
+        metadata = json.loads((self.output_dir / "metadata.json").read_text())
+        self.assertEqual(metadata["helper_iterations"], 123457)
+        self.assertEqual(metadata["helper_repeats"], 5)
+
+    @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
+    def test_missing_helper_executable_fails_instead_of_silently_skipping(self, subprocess_run):
+        for position, suffix in enumerate(("", "_portable", "_compiled")):
+            with self.subTest(suffix=suffix):
+                self.output_dir = self.root / ("missing-helpers" + suffix)
+                executable = self.bin_dir / ("simdurl_bench_helpers" + suffix)
+                original = executable.read_bytes()
+                executable.unlink()
+                subprocess_run.reset_mock()
+                status, stdout, stderr = self.invoke()
+                executable.write_bytes(original)
+                self.assertEqual((status, stdout), (1, ""))
+                self.assertIn(executable.name, stderr)
+                self.assertEqual(subprocess_run.call_count, 11 + position)
+                self.assertFalse((self.output_dir / "results.json").exists())
+                samples = json.loads((self.output_dir / "samples.json").read_text())
+                self.assertEqual(len(samples), 516 + 280 * position)
+                metadata = json.loads((self.output_dir / "metadata.json").read_text())
+                self.assertEqual(metadata["status"], "failed")
+
+    @mock.patch.object(benchmark.subprocess, "run")
+    def test_helper_checksum_mismatch_preserves_evidence_without_publishing(self, subprocess_run):
+        for position, (suffix, build) in enumerate((("_portable", "scalar"), ("_compiled", "compiled")), 1):
+            with self.subTest(build=build):
+                self.output_dir = self.root / ("mismatched-helpers" + suffix)
+
+                def mismatched(command, **kwargs):
+                    process = self.fake_process(command, **kwargs)
+                    if Path(command[0]).name == "simdurl_bench_helpers" + suffix:
+                        process.stdout = process.stdout.replace("# checksum: 901234", "# checksum: 999999")
+                    return process
+
+                subprocess_run.side_effect = mismatched
+                status, stdout, stderr = self.invoke()
+                self.assertEqual((status, stdout), (1, ""))
+                self.assertIn("helpers checksums differ", stderr)
+                self.assertFalse((self.output_dir / "results.json").exists())
+                samples = json.loads((self.output_dir / "samples.json").read_text())
+                self.assertEqual(len(samples), 516 + 280 * position)
+                self.assertEqual(len([name for name in samples if not name.startswith("helpers/")]), 516)
+                raw_output = self.output_dir / f"raw/helpers-{build}-1.stdout"
+                self.assertIn("# checksum: 999999", raw_output.read_text())
+                self.assertEqual(json.loads((self.output_dir / "metadata.json").read_text())["status"], "failed")
+
+    @mock.patch.object(benchmark.subprocess, "run")
+    def test_incomplete_helper_output_retains_all_previous_families_without_publishing(self, subprocess_run):
+        def incomplete(command, **kwargs):
+            process = self.fake_process(command, **kwargs)
+            if Path(command[0]).name == "simdurl_bench_helpers":
+                lines = process.stdout.splitlines()
+                process.stdout = "\n".join(lines[:9] + lines[10:]) + "\n"
+            return process
+
+        subprocess_run.side_effect = incomplete
+        status, stdout, stderr = self.invoke()
+        self.assertEqual((status, stdout), (1, ""))
+        self.assertIn("Incomplete helpers output", stderr)
+        self.assertFalse((self.output_dir / "results.json").exists())
+        samples = json.loads((self.output_dir / "samples.json").read_text())
+        self.assertEqual(len(samples), 516)
+        self.assertFalse(any(name.startswith("helpers/") for name in samples))
+        self.assertTrue((self.output_dir / "raw/helpers-automatic-1.stdout").exists())
+        self.assertEqual(subprocess_run.call_count, 12)
+        self.assertEqual(json.loads((self.output_dir / "metadata.json").read_text())["status"], "failed")
 
     @mock.patch.object(benchmark.subprocess, "run")
     def test_formscan_checksum_mismatch_retains_legacy_samples_without_publishing(self, subprocess_run):

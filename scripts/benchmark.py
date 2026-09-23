@@ -23,11 +23,13 @@ import sys
 import time
 
 
-HARNESS_VERSION = 2
+HARNESS_VERSION = 3
 VALIDATION_REPEATS = 5
 FORMSCAN_REPEATS = 5
+HELPER_REPEATS = 5
 BUILDS = ("automatic", "scalar")
 FORMSCAN_BUILDS = ("automatic", "scalar", "compiled")
+HELPER_BUILDS = ("automatic", "scalar", "compiled")
 CODEC_CASES = {
     (operation, mode, pattern, str(length))
     for operation in ("encode", "decode")
@@ -49,6 +51,21 @@ FORMSCAN_CASES = {
     for pattern in ("literal", "plus_short", "plus_long", "percent_short", "percent_long", "mixed")
     for length in (16, 64, 128, 512, 4096, 16384)
     if length > 256 or pattern not in ("plus_long", "percent_long")
+}
+
+HELPER_CASES = {
+    (operation, pattern, str(length), "runtime", variant)
+    for operation in ("ascii_copy", "ascii_inplace_already_lowered", "hex_lower", "hex_upper")
+    for pattern in (("mixed_ascii", "unchanged_ascii", "high_bytes")
+                    if operation.startswith("ascii_") else ("binary",))
+    for length in (0, 1, 8, 15, 16, 17, 20, 31, 32, 33, 48, 63, 64, 65, 128, 512, 4096)
+    for variant in ("portable_C_comparator", "simdurl")
+    if length or pattern in ("mixed_ascii", "binary")
+} | {
+    (operation, "binary", str(length), "fixed", variant)
+    for operation in ("hex_lower", "hex_upper")
+    for length in (16, 20, 32, 64)
+    for variant in ("portable_C_comparator", "simdurl")
 }
 
 
@@ -203,6 +220,53 @@ def parse_formscan(output, build, iterations):
     }, checksum(lines[-1], "# checksum: ")
 
 
+def parse_helpers(output, build, iterations):
+    lines = output.splitlines()
+    backend = {
+        "automatic": "# simdurl: automatic CPU selection (header-only)",
+        "scalar": "# simdurl: portable C header-only; compiler-generated SIMD permitted",
+        "compiled": "# simdurl: compiled library; configured library CPU selection applies",
+    }[build]
+    headers = [
+        backend,
+        "# comparators: independent portable C; optimization and vectorization enabled",
+        "# comparators assume valid arguments; simdurl includes API argument checks",
+        "# both variants use noinline wrappers; compiled simdurl retains a separate API boundary",
+        "# fixed hex wrappers expose constant lengths and case to both variants",
+        "# inplace inputs are already lowercased before timing; no input-reset cost included",
+        "# checksums, output sampling and call overhead are included in both timings",
+        f"# {iterations} iterations/sample; {HELPER_REPEATS} alternating samples; CPU time; ns/operation",
+        "operation,pattern,bytes,length_kind,variant,sample,ns_per_op",
+    ]
+    if len(lines) < 10 or lines[:9] != headers:
+        raise BenchmarkError("Unexpected helpers header, build, or iteration count")
+    result = {}
+    seen = set()
+    try:
+        for fields in csv.reader(io.StringIO("\n".join(lines[9:-1])), strict=True):
+            if len(fields) != 7:
+                raise BenchmarkError(f"Malformed helpers row: {fields!r}")
+            case = tuple(fields[:5])
+            sample = fields[5]
+            if (case not in HELPER_CASES
+                    or sample not in {str(i) for i in range(1, HELPER_REPEATS + 1)}
+                    or (case, sample) in seen):
+                raise BenchmarkError(f"Unexpected or duplicate helpers sample: {fields[:6]!r}")
+            seen.add((case, sample))
+            operation, pattern, length, length_kind, variant = case
+            name = f"helpers/{operation}/{pattern}/{length}/{length_kind}/{variant}/{build}"
+            result.setdefault(name, {})[int(sample)] = positive_number(fields[6], "helpers ns/op")
+    except csv.Error as error:
+        raise BenchmarkError(f"Malformed helpers CSV: {error}") from error
+    expected_samples = len(HELPER_CASES) * HELPER_REPEATS
+    if len(seen) != expected_samples:
+        raise BenchmarkError(f"Incomplete helpers output: {len(seen)}/{expected_samples} samples")
+    return {
+        name: [samples[i] for i in range(1, HELPER_REPEATS + 1)]
+        for name, samples in result.items()
+    }, checksum(lines[-1], "# checksum: ")
+
+
 def bmf(samples):
     """The displayed bounds are the observed range, not confidence intervals."""
     return {
@@ -294,6 +358,8 @@ def run(args):
         "formscan_iterations": args.formscan_iterations,
         "formscan_repeats": FORMSCAN_REPEATS,
         "formscan_iteration_scaling": "max(1, base_iterations // ceil(length / 64))",
+        "helper_iterations": args.helper_iterations,
+        "helper_repeats": HELPER_REPEATS,
         "timer": "process CPU time (C clock)",
         "measure": "latency (nanoseconds per operation)",
         "summary": "median with observed minimum and maximum",
@@ -310,13 +376,15 @@ def run(args):
             ("codec", args.codec_repeats, args.codec_iterations, parse_codec, ""),
             ("validate", 1, args.validation_iterations, parse_validation, "_validate"),
             ("formscan", 1, args.formscan_iterations, parse_formscan, "_formscan"),
+            ("helpers", 1, args.helper_iterations, parse_helpers, "_helpers"),
         ):
-            builds = FORMSCAN_BUILDS if family == "formscan" else BUILDS
+            builds = (FORMSCAN_BUILDS if family == "formscan" else
+                      HELPER_BUILDS if family == "helpers" else BUILDS)
             for repeat in range(repeats):
                 for build in builds[::1 if repeat % 2 == 0 else -1]:
                     executable_name = "simdurl_bench" + suffix
                     if build == "scalar":
-                        executable_name += "_portable" if family == "formscan" else "_scalar"
+                        executable_name += "_portable" if family in ("formscan", "helpers") else "_scalar"
                     elif build == "compiled":
                         executable_name += "_compiled"
                     executable = (args.bin_dir / executable_name).resolve()
@@ -367,6 +435,8 @@ def main(argv=None):
     parser.add_argument("--validation-iterations", type=positive_int, default=100000)
     parser.add_argument("--formscan-iterations", type=positive_int, default=100000,
                         help="base iterations per formscan sample, scaled down above 64 bytes")
+    parser.add_argument("--helper-iterations", type=positive_int, default=500000,
+                        help="iterations per ASCII/hex helper sample")
     parser.add_argument("--timeout", type=positive_int, default=120, help="timeout in seconds per executable invocation")
     parser.add_argument("--commit", help="source commit SHA to record in metadata")
     args = parser.parse_args(argv)

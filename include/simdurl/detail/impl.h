@@ -9,6 +9,8 @@
 #include "encode.h"
 #include "decode.h"
 #include "scan.h"
+#include "ascii.h"
+#include "hex.h"
 
 SIMDURL_DETAIL_INLINE simdurl_result
 simdurl_detail_encode_tail(const char *input, size_t remaining, char *output,
@@ -113,6 +115,60 @@ SIMDURL_API simdurl_status simdurl_validate_bytes(const char *input,
   rejected = simdurl_detail_scan_portable(input, input_length, checks);
 #endif
   return rejected ? SIMDURL_REJECTED : SIMDURL_OK;
+}
+
+SIMDURL_API simdurl_result simdurl_ascii_lower(const char *input,
+                                             size_t input_length,
+                                             char *output,
+                                             size_t output_capacity)
+{
+  if((!input && input_length) || (!output && output_capacity))
+    return simdurl_detail_result(SIMDURL_INVALID_ARGUMENT, 0);
+  if(input_length > output_capacity)
+    return simdurl_detail_result(SIMDURL_BUFFER_TOO_SMALL, 0);
+  if(!input_length)
+    return simdurl_detail_result(SIMDURL_OK, 0);
+#ifdef SIMDURL_DETAIL_X86
+  /* Short spans avoid the target-function call and use inline SSE2/tails. */
+  if(input_length >= 64 && simdurl_detail_has_avx2())
+    simdurl_detail_ascii_lower_avx2(input, input_length, output);
+  else
+    simdurl_detail_ascii_lower_sse2(input, input_length, output);
+#else
+  simdurl_detail_ascii_lower_portable(input, input_length, output);
+#endif
+  return simdurl_detail_result(SIMDURL_OK, input_length);
+}
+
+SIMDURL_API size_t simdurl_hex_encode_bound(size_t input_length)
+{
+  return input_length > SIZE_MAX / 2 ? SIZE_MAX : input_length * 2;
+}
+
+SIMDURL_API simdurl_result simdurl_hex_encode(const char *input,
+                                            size_t input_length,
+                                            char *output,
+                                            size_t output_capacity,
+                                            unsigned int flags)
+{
+  if((flags & ~(unsigned int)SIMDURL_HEX_UPPER) ||
+     (!input && input_length) || (!output && output_capacity) ||
+     input_length > SIZE_MAX / 2)
+    return simdurl_detail_result(SIMDURL_INVALID_ARGUMENT, 0);
+  if(input_length * 2 > output_capacity)
+    return simdurl_detail_result(SIMDURL_BUFFER_TOO_SMALL, 0);
+  if(!input_length)
+    return simdurl_detail_result(SIMDURL_OK, 0);
+#ifdef SIMDURL_DETAIL_X86
+  /* Keep short digests in the inline SSE2 path to avoid an AVX2 call. */
+  if(input_length >= 64 && simdurl_detail_has_avx2())
+    simdurl_detail_hex_encode_avx2(input, input_length, output, flags);
+  else
+    simdurl_detail_hex_encode_sse2(input, input_length, output, flags);
+#else
+  simdurl_detail_hex_encode_portable(input, input_length, output, flags);
+#endif
+  return simdurl_detail_result(SIMDURL_OK, input_length * 2);
 }
 
 SIMDURL_API size_t simdurl_encode_bound(size_t input_length)

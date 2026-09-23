@@ -1,7 +1,7 @@
 # simdurl
 
-Allocation-free URL component encoding, decoding, and byte validation in C99,
-with a C++ compatible API.
+Allocation-free URL component encoding, decoding, byte validation, ASCII
+lowercase conversion, and hex encoding in C99, with a C++ compatible API.
 
 The library accepts byte spans and writes into caller-owned buffers. It supports
 URI components and `application/x-www-form-urlencoded` components, arbitrary
@@ -76,6 +76,48 @@ embedded NUL. Bytes `0x80` through `0xFF` are always allowed. It checks neither
 URL syntax nor text encoding. The check constants are separate from the codec
 flags; in particular, DEL rejection is explicit.
 
+## ASCII lowercase conversion
+
+`simdurl_ascii_lower(input, length, output, capacity)` copies a byte span while
+converting ASCII `A-Z` to `a-z`. Exact in-place conversion is supported:
+
+```c
+char host[] = "EXAMPLE.COM";
+simdurl_result result = simdurl_ascii_lower(
+  host, sizeof(host) - 1, host, sizeof(host) - 1);
+/* On success: result.written == 11, and host contains "example.com". */
+```
+
+Provide at least `length` output bytes. Only ASCII uppercase letters change;
+embedded NUL and bytes `0x80-0xFF` pass through unchanged. Conversion is
+locale-independent and does not perform Unicode case conversion. Input and
+output must either be identical pointers or refer to nonoverlapping spans.
+
+## Hex encoding
+
+`simdurl_hex_encode(input, length, output, capacity, flags)` encodes every input
+byte as two hex digits. Choose `SIMDURL_HEX_LOWER` or `SIMDURL_HEX_UPPER`:
+
+```c
+const char bytes[] = { 0, (char)0xab, (char)0xff };
+char hex[2 * sizeof(bytes)];
+simdurl_result result = simdurl_hex_encode(
+  bytes, sizeof(bytes), hex, sizeof(hex), SIMDURL_HEX_LOWER);
+/* On success: result.written == 6; hex contains the six bytes "00abff". */
+```
+
+`simdurl_hex_encode_bound(n)` returns the exact size, `2*n`, or `SIZE_MAX` on
+overflow. The encoder rejects lengths above `SIZE_MAX/2` before accessing input.
+Input and output must not overlap. This encodes plain hex, without a `%` prefix.
+
+Both helpers return `simdurl_result { status, written }` and append no terminator.
+A NULL input is valid only for zero length, and a NULL output only for zero
+capacity. Insufficient capacity returns `SIMDURL_BUFFER_TOO_SMALL`; invalid
+NULL/length pairs or hex flags return `SIMDURL_INVALID_ARGUMENT`. All argument
+and capacity checks occur before writing, so either error leaves output
+unchanged and sets `written` to zero. Successful calls modify only the reported
+output span and read only the input span.
+
 ## Build and install
 
 Requires CMake 3.20 or newer and a C99 compiler. Tests additionally require C++11.
@@ -121,10 +163,10 @@ There are no heap allocations, mutable dispatch tables, or initialization calls.
 
 By default, x86 builds select SIMD at runtime and remain usable on older CPUs:
 
-| Compiler / CPU | Encoding | Decoding | Byte validation |
+| Compiler / CPU | URL encoding | URL decoding | Byte validation, ASCII lowercase, hex encoding |
 | --- | --- | --- | --- |
-| GCC 9+ or Clang 10+, x86-64 with AVX-512 VBMI2/BW/VL, AVX2, POPCNT | Parallel hex expansion and byte compression | Parallel substitution and byte compression | AVX2 |
-| Same compilers, x86-64 with AVX2 only | SIMD literal blocks, scalar escapes | Portable C | AVX2 |
+| GCC 9+ or Clang 10+, x86-64 with AVX-512 VBMI2/BW/VL, AVX2, POPCNT | Parallel hex expansion and byte compression | Parallel substitution and byte compression | AVX2 / SSE2 |
+| Same compilers, x86-64 with AVX2 only | SIMD literal blocks, scalar escapes | Portable C | AVX2 / SSE2 |
 | Same compilers, other x86-64 CPUs | Portable C | Portable C | SSE2 |
 | Other CPUs and compilers, including MSVC and clang-cl | Portable C | Portable C | Portable C |
 
@@ -134,6 +176,15 @@ required. The byte scanner uses explicit SIMD for 32-byte AVX2 or 16-byte SSE2
 blocks, with bounded portable C tails. Its portable implementation uses 32-byte
 reductions that the compiler may vectorize. Each path checks a block before
 advancing, allowing early rejection without scanning the rest of the input.
+
+Lowercase conversion and hex encoding also use explicit SSE2/AVX2, with fixed
+16-/32-byte loads and stores for complete vector blocks and portable C tails.
+Hex encoding expands each block into two output vectors and also handles an
+eight-byte remainder with a 16-byte store. Both helpers select AVX2 starting at
+64 input bytes, keeping shorter calls in SSE2/portable code to avoid dispatch
+overhead. Their portable C loops
+permit compiler-generated SIMD; actual vectorization depends on the compiler,
+length, and its alias checks. Short calls and tails may remain scalar.
 
 For a known deployment CPU, compile header-only callers with suitable target
 flags (for example, `-march=native` on GCC/Clang x86-64). When all required
@@ -159,9 +210,10 @@ accessing input.
 
 ## API contract
 
-Encoding and decoding take `(input, input_length, output, output_capacity, flags)`
-and return `simdurl_result { status, written }`. Byte validation returns a status
-directly, as described above.
+URL encoding and decoding take
+`(input, input_length, output, output_capacity, flags)` and return
+`simdurl_result { status, written }`. The contracts for byte validation, ASCII
+lowercase conversion, and hex encoding are described above.
 
 | Status | Meaning |
 | --- | --- |
@@ -170,7 +222,8 @@ directly, as described above.
 | `SIMDURL_INVALID_ARGUMENT` | Invalid flags, invalid NULL/length pair, or encode length overflow |
 | `SIMDURL_REJECTED` | A decoded or raw byte was forbidden by rejection flags |
 
-On any error, `written` is zero and the destination may be partially modified.
+For URL encoding and decoding, errors set `written` to zero and may leave the
+destination partially modified.
 SIMD stores may modify unused bytes within `output_capacity`; no write exceeds
 capacity and no read exceeds `input_length`. If decoded input is forbidden and
 output capacity is also insufficient, either `SIMDURL_REJECTED` or
@@ -205,6 +258,9 @@ read-only guarded pages on Unix and Windows. Tests also install to a temporary
 prefix, relocate that prefix, and build separate consumers of both CMake targets.
 Form literal-scanning tests check linear search work to catch repeated suffix
 scans without relying on timing thresholds.
+Lowercase/hex tests check all byte values, exact in-place lowercase conversion,
+both hex cases, preflight failures, vector boundaries, output canaries, direct
+backends, and protected input/output pages.
 
 CI covers Linux GCC/Clang, macOS ARM64, and Windows MSVC, MSYS2, and Cygwin,
 including native 32-bit Windows builds. It checks static/shared libraries,
@@ -259,6 +315,26 @@ library calls. URI controls use the same inputs. CSV output reports five samples
 in CPU nanoseconds per call for 16 through 16384 input bytes. The optional argument
 sets iterations at 64 bytes (default 20000); longer cases use fewer iterations.
 Portable builds still permit compiler-generated SIMD and optimized libc routines.
+
+Lowercase conversion and hex encoding have benchmarks for header-only,
+portable C, and compiled-library calls:
+
+```sh
+./build/benchmarks/simdurl_bench_helpers
+./build/benchmarks/simdurl_bench_helpers_portable
+./build/benchmarks/simdurl_bench_helpers_compiled
+```
+
+These compare against simple C loops with normal compiler optimization enabled.
+They cover short and long buffers, mixed/unchanged ASCII, high bytes, and both
+hex cases. Separate fixed-length hex calls cover 16-, 20-, 32-, and 64-byte
+digests so constant-length optimization is measured as well as runtime lengths.
+In-place lowercase measurements use already-lowercased input, as labeled in the
+CSV; they do not include an input-reset copy. Timings include call and checksum
+costs, and the compiled variant includes its library call. Pass an iteration
+count to override the default 100000 per sample. Bencher records all three
+variants, including the 63/64/65-byte dispatch boundary, using 500000 iterations
+per sample for helper measurements.
 
 The [historical benchmarking guide](docs/benchmarking.md) describes the Bencher
 workflow, per-commit results, manual backfills, and local verification.

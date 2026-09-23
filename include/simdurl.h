@@ -74,6 +74,43 @@ SIMDURL_API simdurl_status simdurl_validate_bytes(const char *input,
                                                 size_t input_length,
                                                 unsigned int checks);
 
+/* Convert only ASCII A-Z to a-z, copying all other bytes unchanged, including
+ * NUL and bytes 0x80-0xff. Length is explicit; no terminator is appended.
+ * Exact in-place conversion (input == output) is supported; other overlap is
+ * not. Output capacity must be at least input_length. No read or write extends
+ * beyond the input or written output span.
+ * NULL input is valid only for zero length; NULL output only for zero capacity.
+ * Errors return written = 0 and leave output unchanged. Success writes exactly
+ * input_length bytes. This is locale-independent, not Unicode case conversion.
+ */
+SIMDURL_API simdurl_result simdurl_ascii_lower(const char *input,
+                                             size_t input_length,
+                                             char *output,
+                                             size_t output_capacity);
+
+enum simdurl_hex_case {
+  SIMDURL_HEX_LOWER = 0,
+  SIMDURL_HEX_UPPER = 1
+};
+
+/* Exact hex-encoded size, without a terminator; SIZE_MAX on overflow. */
+SIMDURL_API size_t simdurl_hex_encode_bound(size_t input_length);
+
+/* Encode each byte as two hex digits. Choose HEX_LOWER (0) or HEX_UPPER;
+ * other flag bits are invalid. Input and output must not overlap.
+ * Length is explicit; embedded NUL is data and no terminator is appended.
+ * Output capacity must be at least 2 * input_length. Lengths above SIZE_MAX/2
+ * return INVALID_ARGUMENT before accessing input or computing the product.
+ * NULL input is valid only for zero length; NULL output only for zero capacity.
+ * Errors return written = 0 and leave output unchanged. Success writes exactly
+ * 2 * input_length bytes. No read or write extends beyond those spans.
+ */
+SIMDURL_API simdurl_result simdurl_hex_encode(const char *input,
+                                            size_t input_length,
+                                            char *output,
+                                            size_t output_capacity,
+                                            unsigned int flags);
+
 /* Worst-case encoded size, without a terminator; SIZE_MAX on overflow. */
 SIMDURL_API size_t simdurl_encode_bound(size_t input_length);
 
@@ -94,7 +131,7 @@ SIMDURL_API simdurl_result simdurl_encode(const char *input, size_t input_length
  * Exact in-place decoding (input == output) is supported; other overlap is not.
  * input_length bytes of output capacity always suffice.
  *
- * Encoding and decoding are allocation-free and binary-safe. Lengths are
+ * URL encoding and decoding are allocation-free and binary-safe. Lengths are
  * explicit: zero means empty, and no NUL terminator is appended. A NULL input
  * is valid only for zero input length; a NULL output only for zero capacity.
  * On success, written is the number of output bytes. On any error, written is

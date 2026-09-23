@@ -8,6 +8,7 @@
 !benchmarks/bench.c
 !benchmarks/bench_validate.c
 !benchmarks/bench_formscan.c
+!benchmarks/bench_helpers.c
 !benchmarks/bencher/
 !benchmarks/bencher/Dockerfile
 !benchmarks/bencher/Dockerfile.dockerignore

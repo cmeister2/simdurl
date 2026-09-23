@@ -20,17 +20,23 @@ Callers must supply valid spans and obey the overlap preconditions in
 | Input remains unchanged for separate-buffer operations | Input snapshots and read-only mappings |
 | Exact in-place decoding preserves unread bytes | Memory tests, direct decoder tests, semantic reference comparisons |
 | Literal decoding is bounded and form scanning stays linear as input grows | `test_literals.c`: byte and marker boundaries, capacity/guard checks, counted searches |
-| Every error has `written == 0` | Contract, memory, semantic, and fuzz tests |
+| ASCII lowercase mapping and exact in-place conversion; both hex cases, bounds, and unchanged output on preflight errors | `test_helpers.c`: all byte values, independent references, direct backends, canaries, and guard pages |
+| Every error has `written == 0` | Contract, memory, semantic, helper, and fuzz tests |
 | Portable and CPU-specific implementations agree with independent references | `test_backends.c`, direct scanner tests, fuzz targets |
 | C/C++ and packaging modes | Compiled/header-only/portable suites, full C++ codec suite, single implementation TU with separate consumers, C caller linked to a C++ implementation TU, relocated install tests |
 
-The oracle compares only the first `written` bytes on success. It never requires
-an unchanged output buffer on errors. SIMD may change bytes after `written`
-within `output_capacity`; the capacity boundary is the safety boundary.
+For URL encoding and decoding, the oracle compares only the first `written`
+bytes on success and permits a modified output buffer on errors. SIMD may
+change bytes after `written` within `output_capacity`; the capacity boundary
+is the safety boundary.
 If forbidden decoded data and insufficient output capacity coexist, either
 `REJECTED` or `BUFFER_TOO_SMALL` is permitted, but success is not. With sufficient
 capacity, rejection must be reported. Unsupported partial overlap is not a test
 case that must be accepted or rejected safely.
+
+Lowercase conversion and hex encoding validate arguments and capacity before
+writing, so their tests require an unchanged destination on errors and no writes
+after `written` on success.
 
 Canaries alone cannot detect overreads, and an oversized initialized source
 allocation can hide them from ASan. Guard pages and exact heap allocations

@@ -19,7 +19,8 @@ int main(void)
     decode = "vbmi2";
   }
 #endif
-  printf("{\"compiler\":\"%s\",\"encode\":\"%s\",\"decode\":\"%s\",\"validate\":\"%s\"}\n",
-         __VERSION__, encode, decode, validate);
+  printf("{\"compiler\":\"%s\",\"encode\":\"%s\",\"decode\":\"%s\",\"validate\":\"%s\","
+         "\"ascii_lower\":\"%s\",\"hex_encode\":\"%s\"}\n",
+         __VERSION__, encode, decode, validate, validate, validate);
   return 0;
 }

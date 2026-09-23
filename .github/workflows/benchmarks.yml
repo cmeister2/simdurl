@@ -41,7 +41,7 @@ jobs:
             --build-arg "SOURCE_SHA=$GITHUB_SHA" --tag simdurl-bencher:smoke .
           docker run --rm --network none simdurl-bencher:smoke \
             --codec-repeats 1 --codec-iterations 10000 --validation-iterations 10000 \
-            --formscan-iterations 20000 \
+            --formscan-iterations 20000 --helper-iterations 10000 \
             > "$RUNNER_TEMP/benchmark-smoke.json" 2> "$RUNNER_TEMP/benchmark-smoke.log" || {
               cat "$RUNNER_TEMP/benchmark-smoke.log" >&2
               exit 1
