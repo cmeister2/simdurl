@@ -85,8 +85,10 @@ simdurl_detail_decode_blocks(const char **input, size_t *remaining,
       unsigned int keep = (0xffffffffU >> (32 - consumed)) &
                           ~((escapes << 1) | (escapes << 2));
       __m256i low = _mm256_and_si256(src, _mm256_set1_epi8(15));
-      __m256i nibble = _mm256_mask_add_epi8(
-        low, letter_ok, low, _mm256_set1_epi8(9));
+      /* Compose masked addition directly: Clang 18's masked-add wrapper can
+       * give its nested AVX2 call incompatible evex512 target attributes. */
+      __m256i nibble = _mm256_mask_mov_epi8(low, letter_ok,
+        _mm256_add_epi8(low, _mm256_set1_epi8(9)));
       /* Bridge the two 16-byte halves for lane-local AVX2 shifts. */
       __m256i upper = _mm256_permute2x128_si256(nibble, nibble, 0x81);
       __m256i high_nibble = _mm256_alignr_epi8(upper, nibble, 1);
@@ -105,7 +107,9 @@ simdurl_detail_decode_blocks(const char **input, size_t *remaining,
       if(reject_limit && ((unsigned int)_mm256_cmp_epu8_mask(
            result, _mm256_set1_epi8((char)reject_limit), _MM_CMPINT_LT) & keep))
         return 0;
-      result = _mm256_maskz_compress_epi8((__mmask32)keep, result);
+      /* An explicit zero source avoids the same nested-intrinsic mismatch. */
+      result = _mm256_mask_compress_epi8(
+        _mm256_setzero_si256(), (__mmask32)keep, result);
       /* Separate buffers permit a full-vector store. In-place decoding must
        * preserve unconsumed bytes at positions 30 and 31. Keep the fixed-size
        * copy separate so compilers can emit a vector store. */
