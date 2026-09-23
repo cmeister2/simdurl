@@ -49,8 +49,25 @@ submission order rather than the original commit dates.
 
 The harness comes from the workflow revision, while library headers come from
 the requested commit. This holds the workload constant during a backfill.
-Revisions before byte validation was introduced cannot build the complete
-current suite; do not interpret a missing benchmark as zero performance.
+The image detects whether those headers declare byte validation. Earlier
+revisions run the 72 codec series; revisions with validation run all 336 series.
+Unavailable validation measurements are omitted, and backend metadata records
+validation as unavailable. The initial README-only commit has no library to
+benchmark.
+
+Bencher assigns version numbers when a previously unseen commit is first
+submitted. Backdating alone cannot insert an older commit before an existing
+version. To rebuild a chronological history, pause other main submissions,
+preserve the existing reports, and start a fresh Bencher branch head with
+`bencher branch update simdurl main --start-point-reset`. Existing reports remain
+stored under the previous head. Submit one commit at a time, oldest first,
+waiting for each successful report and checking its version and hash before
+continuing. A serialized matrix does not guarantee job scheduling order.
+
+For commit-date graphs, add `--backdate` with the commit's committer timestamp
+when submitting each historical run. These are measurements taken now against
+historical source; the job evidence retains the actual measurement timestamps.
+Restore automatic submissions after catching up to the current main tip.
 
 ## Measurement contract
 
@@ -112,6 +129,8 @@ JSON on stdout and saves the same metrics, raw output, metadata, and samples in
 the directory. Optional `--codec-iterations`, `--codec-repeats`, and
 `--validation-iterations` arguments support smoke checks. Very small iteration
 counts may round to zero and are rejected.
+Use `--families codec` when running only the codec executables from an older
+revision; the default is `--families codec validate`.
 
 To exercise the exact container locally:
 

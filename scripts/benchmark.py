@@ -224,6 +224,7 @@ def run(args):
         "harness_version": HARNESS_VERSION,
         "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "commit": args.commit,
+        "families": args.families,
         "machine": machine_metadata(),
         "codec_iterations": args.codec_iterations,
         "codec_repeats": args.codec_repeats,
@@ -241,7 +242,7 @@ def run(args):
     checksums = {}
     try:
         # Alternate builds between process repeats to reduce order bias.
-        for family in ("codec", "validate"):
+        for family in args.families:
             repeats = args.codec_repeats if family == "codec" else 1
             iterations = args.codec_iterations if family == "codec" else args.validation_iterations
             parse = parse_codec if family == "codec" else parse_validation
@@ -292,12 +293,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=Path("build/benchmarks"))
     parser.add_argument("--output-dir", type=Path, default=Path("benchmark-results"), help="empty directory for raw output and metadata")
+    parser.add_argument("--families", nargs="+", choices=("codec", "validate"),
+                        default=["codec", "validate"],
+                        help="benchmark families to run (default: codec validate)")
     parser.add_argument("--codec-iterations", type=positive_int, default=100000)
     parser.add_argument("--codec-repeats", type=positive_int, default=5)
     parser.add_argument("--validation-iterations", type=positive_int, default=100000)
     parser.add_argument("--timeout", type=positive_int, default=120, help="timeout in seconds per executable invocation")
     parser.add_argument("--commit", help="source commit SHA to record in metadata")
     args = parser.parse_args(argv)
+    if len(args.families) != len(set(args.families)):
+        parser.error("--families must not contain duplicates")
     try:
         result = run(args)
     except (BenchmarkError, OSError, ValueError) as error:

@@ -19,6 +19,9 @@ int main(void)
     decode = "vbmi2";
   }
 #endif
+#if defined(SIMDURL_BENCH_HAS_VALIDATION) && !SIMDURL_BENCH_HAS_VALIDATION
+  validate = "unavailable";
+#endif
   printf("{\"compiler\":\"%s\",\"encode\":\"%s\",\"decode\":\"%s\",\"validate\":\"%s\"}\n",
          __VERSION__, encode, decode, validate);
   return 0;

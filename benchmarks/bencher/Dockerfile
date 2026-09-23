@@ -5,13 +5,19 @@ COPY include/ include/
 COPY benchmarks/bench.c benchmarks/bench_validate.c benchmarks/bencher/backend_info.c ./
 ARG SOURCE_SHA
 RUN mkdir /out && \
-    for family in bench bench_validate; do \
+    families=bench && measures=codec && has_validation=0 && \
+    if grep -q 'simdurl_validate_bytes(' include/simdurl.h; then \
+      families="bench bench_validate"; measures="codec validate"; has_validation=1; \
+    fi && \
+    for family in $families; do \
       gcc -std=c99 -O3 -DNDEBUG -DSIMDURL_HEADER_ONLY -Iinclude \
         "$family.c" -o "/out/simdurl_$family" && \
       gcc -std=c99 -O3 -DNDEBUG -DSIMDURL_HEADER_ONLY -DSIMDURL_DISABLE_SIMD=1 -Iinclude \
         "$family.c" -o "/out/simdurl_${family}_scalar" || exit 1; \
     done && \
-    gcc -std=c99 -O3 -DNDEBUG -DSIMDURL_HEADER_ONLY -Iinclude backend_info.c -o /out/backend_info && \
+    gcc -std=c99 -O3 -DNDEBUG -DSIMDURL_HEADER_ONLY \
+      -DSIMDURL_BENCH_HAS_VALIDATION=$has_validation -Iinclude backend_info.c -o /out/backend_info && \
+    printf '%s\n' "$measures" > /out/families && \
     printf '%s\n' "$SOURCE_SHA" > /out/source-sha && \
     printf '%s\n' '-std=c99 -O3 -DNDEBUG -DSIMDURL_HEADER_ONLY; scalar: -DSIMDURL_DISABLE_SIMD=1; no native tuning' > /out/compiler-flags
 

@@ -16,6 +16,7 @@ with tempfile.TemporaryDirectory(prefix="simdurl-benchmark-") as directory:
         "--output-dir", str(output),
         "--commit", (root / "benchmarks/source-sha").read_text().strip(),
     ]
+    command.extend(["--families", *(root / "benchmarks/families").read_text().split()])
     # Extra arguments make it possible to smoke-test the identical image locally.
     command.extend(sys.argv[1:])
     backend = json.loads(subprocess.check_output([root / "benchmarks/backend_info"], text=True))

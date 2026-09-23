@@ -152,10 +152,59 @@ class RunnerTests(unittest.TestCase):
         metadata = json.loads((self.output_dir / "metadata.json").read_text())
         self.assertEqual(metadata["status"], "complete")
         self.assertEqual(metadata["commit"], "test-commit")
+        self.assertEqual(metadata["families"], ["codec", "validate"])
         self.assertEqual(len(metadata["executables"]), 4)
         self.assertEqual(subprocess_run.call_count, 8)
         self.assertEqual(len(list((self.output_dir / "raw").glob("*.stdout"))), 8)
         self.assertEqual(len(list((self.output_dir / "raw").glob("*.stderr"))), 8)
+
+    @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
+    def test_codec_only_succeeds_without_validation_executables(self, subprocess_run):
+        for executable in self.bin_dir.glob("*_validate*"):
+            executable.unlink()
+        status, stdout, stderr = self.invoke("--families", "codec")
+        self.assertEqual((status, stderr), (0, ""))
+        result = json.loads(stdout)
+        self.assertEqual(len(result), 72)
+        self.assertTrue(all(name.startswith("codec/") for name in result))
+        self.assertIn("codec/encode/URI/literal/16/simdurl/automatic", result)
+        self.assertIn("codec/encode/URI/literal/16/simdurl/scalar", result)
+        samples = json.loads((self.output_dir / "samples.json").read_text())
+        self.assertTrue(all(len(values) == 3 for values in samples.values()))
+        metadata = json.loads((self.output_dir / "metadata.json").read_text())
+        self.assertEqual(metadata["families"], ["codec"])
+        self.assertEqual(set(metadata["checksums"]), {"codec"})
+        self.assertEqual(set(metadata["executables"]), {"simdurl_bench", "simdurl_bench_scalar"})
+        self.assertEqual(subprocess_run.call_count, 6)
+        self.assertEqual(len(list((self.output_dir / "raw").glob("*.stdout"))), 6)
+
+    @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
+    def test_validation_only_succeeds_without_codec_executables(self, subprocess_run):
+        for name in ("simdurl_bench", "simdurl_bench_scalar"):
+            (self.bin_dir / name).unlink()
+        status, stdout, stderr = self.invoke("--families", "validate")
+        self.assertEqual((status, stderr), (0, ""))
+        result = json.loads(stdout)
+        self.assertEqual(len(result), 264)
+        self.assertTrue(all(name.startswith("validate/") for name in result))
+        samples = json.loads((self.output_dir / "samples.json").read_text())
+        self.assertTrue(all(len(values) == 5 for values in samples.values()))
+        metadata = json.loads((self.output_dir / "metadata.json").read_text())
+        self.assertEqual(metadata["families"], ["validate"])
+        self.assertEqual(set(metadata["checksums"]), {"validate"})
+        self.assertEqual(len(metadata["executables"]), 2)
+        self.assertEqual(subprocess_run.call_count, 2)
+
+    @mock.patch.object(benchmark.subprocess, "run")
+    def test_duplicate_families_fail_before_running(self, subprocess_run):
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            with self.assertRaises(SystemExit) as error:
+                benchmark.main(["--families", "codec", "codec",
+                                "--output-dir", str(self.output_dir)])
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("must not contain duplicates", stderr.getvalue())
+        self.assertFalse(self.output_dir.exists())
+        subprocess_run.assert_not_called()
 
     @mock.patch.object(benchmark.subprocess, "run")
     def test_failed_process_keeps_raw_error_and_emits_no_bmf(self, subprocess_run):
