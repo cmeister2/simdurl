@@ -11,15 +11,21 @@ The core suite uses automatic header-only dispatch in four executables. Scalar
 and separately compiled variants remain in the image for local full-suite
 diagnostics; every build comes from that same source commit. Historical
 comparison happens in Bencher under the source SHA and the separate
-`azure-d2s-v6-gcc15-v1` testbed. There is no new manually dispatched
+`azure-d2s-v6-gcc15-v2` testbed. There is no new manually dispatched
 workflow or paired-revision runner.
 
-Status: live qualification of the current GCC 15.2.0 core profile passed,
+The `v2` profile adds discarded warmup and 20 calibrated samples per case, with
+a 100 ms target and 50 ms minimum CPU duration for each accepted sample. It
+starts a separate measurement history from the five-sample `v1` profile. This
+sampling change has not been qualified on Azure yet; the next automatic `main`
+runs will provide that evidence without a separate allocation now.
+
+Status: live qualification of the original GCC 15.2.0 core profile passed,
 including native VBMI2 checks, evidence validation, resource deletion, and
 Bencher publication. An independent running-VM recovery drill also passed. Monthly cost
 controls and alerts are deployed and verified; the GitHub enable variable is
-`true`. The first automatic run authenticated through GitHub OIDC in cleanup;
-full automatic execution remains to be verified after the image export correction.
+`true`. Automatic `v1` runs on `main` have since completed allocation,
+measurement, cleanup, and publication using GitHub OIDC.
 The agreed operating budget is **USD 100 per calendar month for
 all Azure benchmarking resources**. The subscription bills in GBP, so its Azure
 budget is set to **GBP 60 per month**, with new allocations stopped at **GBP 48**
@@ -65,9 +71,10 @@ The controller, guest, exporter, and lifecycle checks passed 132 unit
 tests; workflow lint and Bicep compilation also passed. Local GCC 15 container
 checks passed the ten-metric core profile at normal iteration counts and a
 1,356-metric full-suite smoke test. Local qualification used the
-operator identity. GitHub OIDC authentication and artifact transfer have since
-passed on `main`; automatic allocation, measurement, and publication remain to
-be verified after the image export correction.
+operator identity. The subsequent automatic run for `5f89325` completed through
+publication in [Bencher report 01a0d06d-1c2a-7dc1-9b35-961b34ec8206](https://api.bencher.dev/v0/projects/simdurl/reports/01a0d06d-1c2a-7dc1-9b35-961b34ec8206).
+These checks describe the original fixed-sample profile, not Azure qualification
+of the new calibrated profile.
 
 ```mermaid
 flowchart LR
@@ -104,11 +111,23 @@ the cleanup Function's package and host state.
 
 The image pins GCC 15.2.0 and Python 3.14.7 by digest and uses the
 [core measurement contract](benchmarking.md#measurement-contract): ten metric
-series from four automatic-dispatch executables, with five samples per case at
-normal iteration counts. The Azure controller accepts only this core profile.
+series from four automatic-dispatch executables. Each case receives at least
+100 ms of discarded warmup and 20 accepted timing samples, calibrated separately
+to target 100 ms of CPU time per sample with a 50 ms minimum. Bencher publishes
+the median per case with observed minimum/maximum bounds, not confidence
+intervals. Raw evidence retains actual iterations and duration for accepted and
+discarded batches. The Azure controller accepts only this core profile for
+normal measurements; fixed sampling is limited to smoke checks.
 The benchmark harness separately supports `--suite full` for local diagnostic
 runs of 1,356 series across ten executables, including scalar and compiled builds.
 The native VBMI2 correctness gate is unchanged by the smaller measurement set.
+
+This policy improves sampling within each VM but does not guarantee identical
+performance between allocations. Identical binaries previously varied roughly
+10–20% across fresh VMs even when the CPU model matched. Observe the next normal
+reports before setting tighter regression thresholds. Repeating an unchanged
+commit across allocations remains an optional follow-up qualification, with
+one source commit per VM.
 
 The pinned `docker/build-push-action` builds Azure images with `load: true` and
 `provenance: false` so Docker exports exactly one executable image. Local builds
@@ -393,12 +412,13 @@ python3 scripts/benchmark_azure.py run --config "$BENCH_SETUP_DIR/azure-config.j
 
 The output directory must be empty and the run ID must be unique. The command
 uploads the built image, provisions the VM, requires native VBMI2 tests, gathers
-results, and attempts cleanup even after failure. `--smoke` reduces iteration
-counts; its results are functionality evidence and must not enter the normal
-performance testbed. The CLI itself never publishes to Bencher.
+results, and attempts cleanup even after failure. `--smoke` selects fixed
+sampling with reduced iteration counts; its results are functionality evidence
+and must not enter the normal performance testbed. The CLI itself never
+publishes to Bencher.
 
 Remove `--smoke` and use a fresh run ID/output directory to qualify the core
-profile with its normal iteration counts.
+profile with warmup and calibrated sampling.
 Confirm complete measurements and deletion of the VM, disk, NIC, and public IP.
 Also verify recovery after losing the controller with a running VM. A successful
 benchmark alone does not validate independent cleanup. Further fault-injection
@@ -459,7 +479,7 @@ same validation before allocating resources. No manual launch is needed for the 
 existing historical backfill facility remains available for recovering gaps.
 
 Publication reads saved `results.json` with Bencher's file adapter and records
-branch `main`, the exact source SHA, and testbed `azure-d2s-v6-gcc15-v1`. It runs
+branch `main`, the exact source SHA, and testbed `azure-d2s-v6-gcc15-v2`. It runs
 after cleanup. Rerunning only a failed publication job reuses the saved artifact
 and does not allocate another VM. An ambiguous Bencher submission can already
 have created a report; reconcile that report before retrying to avoid duplicates.

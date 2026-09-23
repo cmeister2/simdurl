@@ -44,6 +44,8 @@ simdurl_add_test(simdurl_test_header_only simdurl::header_only)
 simdurl_add_test(simdurl_test_scalar simdurl::header_only)
 target_compile_definitions(simdurl_test_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
 
+simdurl_add_test(simdurl_test_benchmark_sampling simdurl::header_only test_benchmark_sampling.c)
+
 simdurl_add_test(simdurl_test_scanner simdurl::simdurl test_scanner.c)
 simdurl_add_test(simdurl_test_scanner_header_only simdurl::header_only test_scanner.c)
 simdurl_add_test(simdurl_test_scanner_scalar simdurl::header_only test_scanner.c)

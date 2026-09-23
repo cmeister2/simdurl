@@ -10,6 +10,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "bench_sampling.h"
+
 #if defined(_MSC_VER)
 #include <intrin.h>
 #define BENCH_NOINLINE __declspec(noinline)
@@ -87,7 +89,7 @@ static void fill_inputs(char input[INPUT_COUNT][MAX_LENGTH + INPUT_COUNT],
 
 static double measure(scan_function scan,
                       char input[INPUT_COUNT][MAX_LENGTH + INPUT_COUNT],
-                      size_t length, size_t iterations)
+                      size_t length, size_t iterations, uint64_t *elapsed_ns)
 {
   uint64_t sum = 0;
   size_t i;
@@ -102,14 +104,26 @@ static double measure(scan_function scan,
   }
   end = clock();
   checksum += sum;
-  if(start == (clock_t)-1 || end == (clock_t)-1 || end < start)
+  if(bench_elapsed_ns(start, end, elapsed_ns))
     return -1.0;
-  return (double)(end - start) * 1e9 / (double)CLOCKS_PER_SEC /
-         (double)iterations;
+  return (double)*elapsed_ns / (double)iterations;
+}
+
+struct validation_batch {
+  scan_function scan;
+  char (*input)[MAX_LENGTH + INPUT_COUNT];
+  size_t length;
+};
+
+static int measure_batch(void *opaque, size_t iterations, uint64_t *elapsed_ns)
+{
+  struct validation_batch *context = opaque;
+  return measure(context->scan, context->input, context->length, iterations,
+                 elapsed_ns) < 0;
 }
 
 static int run_case(size_t length, unsigned int pattern, unsigned int spaces,
-                    size_t iterations, int core)
+                    size_t iterations, int core, int calibrated)
 {
   static const char *const patterns[] = {
     "valid", "first_forbidden", "last_forbidden", "high_bytes"
@@ -120,6 +134,7 @@ static int run_case(size_t length, unsigned int pattern, unsigned int spaces,
   simdurl_status expected = length && (pattern == 1 || pattern == 2) ?
                              SIMDURL_REJECTED : SIMDURL_OK;
   unsigned int repeat, order, variant;
+  uint64_t elapsed_ns;
   size_t row;
   scans[0] = spaces ? branch_controls_space : branch_controls;
   scans[1] = spaces ? library_controls_space : library_controls;
@@ -128,8 +143,17 @@ static int run_case(size_t length, unsigned int pattern, unsigned int spaces,
     for(row = 0; row < INPUT_COUNT; ++row)
       if(scans[variant](input[row] + row, length) != expected)
         return 1;
-    if((!core || variant) && measure(scans[variant], input, length, 1000) < 0)
+    if(!calibrated && (!core || variant) &&
+       measure(scans[variant], input, length, 1000, &elapsed_ns) < 0)
       return 1;
+  }
+  if(calibrated) {
+    char name[128];
+    struct validation_batch context = { scans[1], input, length };
+    snprintf(name, sizeof(name), "validate/%s/%s/%lu/simdurl/automatic",
+             spaces ? "C0_DEL_SPACE" : "C0_DEL", patterns[pattern],
+             (unsigned long)length);
+    return bench_sample_case(name, iterations, measure_batch, &context);
   }
   for(repeat = 0; repeat < REPEATS; ++repeat) {
     /* Alternate order to reduce consistent first/second-run bias. */
@@ -138,7 +162,7 @@ static int run_case(size_t length, unsigned int pattern, unsigned int spaces,
       variant = (order + repeat) % 2;
       if(core && !variant)
         continue;
-      ns = measure(scans[variant], input, length, iterations);
+      ns = measure(scans[variant], input, length, iterations, &elapsed_ns);
       if(ns < 0)
         return 1;
       printf("%s,%s,%lu,%s,%u,%.3f\n",
@@ -155,8 +179,9 @@ int main(int argc, char **argv)
   size_t iterations = 100000, length_index;
   unsigned int pattern, spaces;
   int core = argc == 3;
-  if(argc > 3 || (core && strcmp(argv[2], "--core"))) {
-    fprintf(stderr, "Usage: %s [iterations_per_sample] [--core]\n", argv[0]);
+  int calibrated = core && !strcmp(argv[2], "--calibrated");
+  if(argc > 3 || (core && !calibrated && strcmp(argv[2], "--core"))) {
+    fprintf(stderr, "Usage: %s [iterations_per_sample] [--core|--calibrated]\n", argv[0]);
     return 1;
   }
   if(argc >= 2) {
@@ -172,15 +197,25 @@ int main(int argc, char **argv)
     iterations = (size_t)parsed;
   }
 #ifdef SIMDURL_DISABLE_SIMD
-  puts("# simdurl: portable C; compiler-generated SIMD remains permitted");
-#else
-  puts("# simdurl: automatic CPU selection (header-only)");
+  if(calibrated) {
+    fputs("Calibrated sampling requires the automatic backend binary\n", stderr);
+    return 1;
+  }
 #endif
-  puts("# comparator: independent portable C branch loop; compiler optimization enabled");
-  printf("# %lu iterations/sample; %u samples/case; CPU time; nanoseconds/operation\n",
-         (unsigned long)iterations, (unsigned int)REPEATS);
-  puts("# Early rejection may inspect only a prefix; no full-buffer throughput is reported");
-  puts("checks,pattern,bytes,variant,sample,ns_per_op");
+  if(calibrated)
+    bench_sampling_header();
+  else {
+#ifdef SIMDURL_DISABLE_SIMD
+    puts("# simdurl: portable C; compiler-generated SIMD remains permitted");
+#else
+    puts("# simdurl: automatic CPU selection (header-only)");
+#endif
+    puts("# comparator: independent portable C branch loop; compiler optimization enabled");
+    printf("# %lu iterations/sample; %u samples/case; CPU time; nanoseconds/operation\n",
+           (unsigned long)iterations, (unsigned int)REPEATS);
+    puts("# Early rejection may inspect only a prefix; no full-buffer throughput is reported");
+    puts("checks,pattern,bytes,variant,sample,ns_per_op");
+  }
   for(length_index = 0; length_index < sizeof(lengths) / sizeof(lengths[0]);
       ++length_index)
     for(spaces = 0; spaces < 2; ++spaces)
@@ -189,7 +224,8 @@ int main(int argc, char **argv)
           continue;
         if(core && !(lengths[length_index] == 4096 && spaces && !pattern))
           continue;
-        if(run_case(lengths[length_index], pattern, spaces, iterations, core)) {
+        if(run_case(lengths[length_index], pattern, spaces, iterations, core,
+                    calibrated)) {
           fputs("Benchmark validation or timer failed\n", stderr);
           return 1;
         }

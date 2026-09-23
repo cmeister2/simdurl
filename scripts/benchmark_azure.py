@@ -473,21 +473,35 @@ def validate_result(directory, manifest):
     if (metadata.get("suite") != "core" or type(metadata.get("benchmark_count")) is not int
             or metadata["benchmark_count"] != 10):
         raise AzureError("Azure measurements require the core suite with exactly ten benchmarks")
+    if type(metadata.get("harness_version")) is not int or metadata["harness_version"] != 5:
+        raise AzureError("Azure measurements require benchmark harness version 5")
+    smoke = manifest.get("smoke") is True
+    policy = {"mode": "fixed"} if smoke else benchmark.CALIBRATED_POLICY
+    if metadata.get("sampling_policy") != policy:
+        raise AzureError("Benchmark sampling policy does not match this run's measurement mode")
+    expected_repeats = 5 if smoke else policy["samples_per_case"]
     codec_repeats = metadata.get("codec_repeats")
-    if type(codec_repeats) is not int or codec_repeats != (1 if manifest.get("smoke") else 5):
+    if type(codec_repeats) is not int or codec_repeats != (1 if smoke else expected_repeats):
         raise AzureError("Codec repetition count does not match this run's measurement mode")
-    if any(type(metadata.get(field)) is not int or metadata[field] != 5 for field in
+    if any(type(metadata.get(field)) is not int or metadata[field] != expected_repeats for field in
            ("validation_repeats", "formscan_repeats", "helper_repeats")):
-        raise AzureError("Benchmark metadata must record five samples per non-codec case")
+        raise AzureError("Benchmark repetition counts do not match this run's measurement mode")
     samples = json.loads(evidence["files"]["samples.json"])
     if set(samples) != expected_cases():
         raise AzureError("Benchmark case set does not match the ten core benchmarks")
     for name, values in samples.items():
-        if not isinstance(values, list) or len(values) != (codec_repeats if name.startswith("codec/") else 5):
+        if not isinstance(values, list) or len(values) != (codec_repeats if name.startswith("codec/") else expected_repeats):
             raise AzureError(f"Incorrect sample count for {name}")
         if any(isinstance(x, bool) or not isinstance(x, (int, float))
                              or not math.isfinite(x) or x <= 0 for x in values):
             raise AzureError("Invalid raw benchmark samples")
+    if not smoke:
+        try:
+            measured_samples = benchmark.validate_calibrated_batches(metadata.get("batches"), expected_cases())
+        except benchmark.BenchmarkError as exc:
+            raise AzureError(f"Invalid calibrated sampling evidence: {exc}") from exc
+        if measured_samples != samples:
+            raise AzureError("Raw benchmark samples do not match the calibrated batch measurements")
     metrics = json.loads((directory / "results.json").read_text())
     if metrics != benchmark.bmf(samples):
         raise AzureError("Benchmark summary does not match raw samples")

@@ -2,6 +2,7 @@
 """Focused validation of benchmark import and failure handling (stdlib only)."""
 
 import contextlib
+import copy
 import io
 import json
 from pathlib import Path
@@ -11,6 +12,77 @@ import unittest
 from unittest import mock
 
 import benchmark
+
+
+def calibrated_output(family):
+    lines = ["# simdurl calibrated v1", "benchmark,phase,sample,iterations,elapsed_ns"]
+    for name in sorted(benchmark.core_names(family)):
+        lines.extend([
+            f"{name},warmup,0,100,0",
+            f"{name},warmup,0,100000,100000000",
+            f"{name},calibration,0,100000,40000000",
+            f"{name},calibration,0,250000,100000000",
+            f"{name},retry,0,250000,49000000",
+        ])
+        for sample in range(1, 21):
+            lines.append(f"{name},sample,{sample},500000,{100000000 + sample * 1000000}")
+    lines.append("# checksum: 123456")
+    return "\n".join(lines) + "\n"
+
+
+class CalibratedParserTests(unittest.TestCase):
+    def test_only_accepted_batches_contribute_to_median_and_range(self):
+        for family in benchmark.CORE_CASES:
+            with self.subTest(family=family):
+                samples, checksum, batches = benchmark.parse_calibrated(calibrated_output(family), family)
+                self.assertEqual(set(samples), benchmark.core_names(family))
+                self.assertEqual(checksum, 123456)
+                for name, values in samples.items():
+                    self.assertEqual(values, list(range(202, 242, 2)))
+                    self.assertEqual(len(batches[name]), 25)
+                    self.assertEqual(benchmark.bmf({name: values})[name]["latency"],
+                                     {"value": 221, "lower_value": 202, "upper_value": 240})
+
+    def test_rejects_missing_short_reordered_or_invalid_batch_evidence(self):
+        _, _, good = benchmark.parse_calibrated(calibrated_output("formscan"), "formscan")
+        name = next(iter(good))
+        changes = {
+            "short warmup": lambda rows: rows[1].update(elapsed_ns=99999999),
+            "short calibration": lambda rows: rows[3].update(elapsed_ns=99999999),
+            "short sample": lambda rows: rows[5].update(elapsed_ns=49999999),
+            "duplicate sample": lambda rows: rows[6].update(sample=1),
+            "missing sample": lambda rows: rows.pop(),
+            "out of order": lambda rows: rows.insert(6, rows.pop(1)),
+            "trailing retry": lambda rows: rows.append(dict(rows[4])),
+            "invalid phase": lambda rows: rows[0].update(phase="other"),
+            "invalid discarded index": lambda rows: rows[0].update(sample=1),
+            "zero iterations": lambda rows: rows[0].update(iterations=0),
+            "boolean iterations": lambda rows: rows[0].update(iterations=True),
+            "negative duration": lambda rows: rows[0].update(elapsed_ns=-1),
+            "fractional duration": lambda rows: rows[0].update(elapsed_ns=0.5),
+            "unnecessary retry": lambda rows: rows[4].update(elapsed_ns=50000000),
+        }
+        for label, change in changes.items():
+            with self.subTest(label=label):
+                batches = copy.deepcopy(good)
+                change(batches[name])
+                with self.assertRaises(benchmark.BenchmarkError):
+                    benchmark.validate_calibrated_batches(batches, {name})
+
+    def test_rejects_changed_case_set_headers_csv_and_checksum(self):
+        lines = calibrated_output("formscan").splitlines()
+        for output in (
+            "\n".join(lines[1:]),
+            "\n".join(lines[:-1]),
+            "\n".join(lines + ["extra"]),
+            "\n".join(lines).replace("plus_long", "other"),
+            "\n".join(lines).replace("# checksum: 123456", "# checksum: invalid"),
+            "\n".join(lines).replace(",sample,1,", ",sample,1.0,"),
+            "\n".join(lines).replace(",warmup,0,100,0", ",warmup,0,100,NaN"),
+            "\n".join(lines[:2] + ['"' + lines[2]] + lines[3:]),
+        ):
+            with self.subTest(output=output[:80]), self.assertRaises(benchmark.BenchmarkError):
+                benchmark.parse_calibrated(output, "formscan")
 
 
 def codec_output(build="automatic", iterations=10000, elapsed="2.500"):
@@ -316,6 +388,7 @@ class RunnerTests(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             status = benchmark.main([
                 "--bin-dir", str(self.bin_dir), "--output-dir", str(self.output_dir),
+                "--sampling", "fixed",
                 "--codec-repeats", "3", "--codec-iterations", "10000", "--commit", "test-commit",
                 *(["--suite", suite] if suite is not None else []), *args,
             ])
@@ -346,7 +419,7 @@ class RunnerTests(unittest.TestCase):
         return subprocess.CompletedProcess(command, 0, output, "")
 
     @mock.patch.object(benchmark.subprocess, "run", side_effect=fake_process)
-    def test_default_runs_only_ten_core_benchmarks_with_existing_names(self, subprocess_run):
+    def test_fixed_core_runs_only_ten_benchmarks_with_existing_names(self, subprocess_run):
         # Core must work with only the four automatic executables installed.
         for executable in self.bin_dir.iterdir():
             if executable.name.endswith(("_scalar", "_portable", "_compiled")):
@@ -377,6 +450,59 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(metadata["executables"]), 4)
         self.assertEqual(subprocess_run.call_count, 6)
         self.assertTrue(all(call.args[0][-1] == "--core" for call in subprocess_run.call_args_list))
+
+    @mock.patch.object(benchmark.subprocess, "run")
+    def test_default_calibrates_ten_cases_and_preserves_batch_evidence(self, subprocess_run):
+        def process(command, **kwargs):
+            executable = Path(command[0]).name
+            family = next((name for name in ("validate", "formscan", "helpers")
+                           if name in executable), "codec")
+            return subprocess.CompletedProcess(command, 0, calibrated_output(family), "")
+
+        subprocess_run.side_effect = process
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            status = benchmark.main([
+                "--bin-dir", str(self.bin_dir), "--output-dir", str(self.output_dir),
+                "--commit", "test-commit",
+            ])
+        self.assertEqual(status, 0)
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(set(result), benchmark.core_names())
+        self.assertEqual(subprocess_run.call_count, 4)
+        self.assertTrue(all(call.args[0][-1] == "--calibrated"
+                            for call in subprocess_run.call_args_list))
+        metadata = json.loads((self.output_dir / "metadata.json").read_text())
+        samples = json.loads((self.output_dir / "samples.json").read_text())
+        self.assertEqual(metadata["sampling_policy"], benchmark.CALIBRATED_POLICY)
+        for key in ("codec_repeats", "validation_repeats", "formscan_repeats", "helper_repeats"):
+            self.assertEqual(metadata[key], 20)
+        self.assertEqual(benchmark.validate_calibrated_batches(metadata["batches"]), samples)
+        self.assertEqual(benchmark.bmf(samples), result)
+        self.assertEqual(metadata["status"], "complete")
+        self.assertEqual(len(metadata["executables"]), 4)
+
+    @mock.patch.object(benchmark.subprocess, "run")
+    def test_calibrated_failure_retains_raw_output_without_publishing(self, subprocess_run):
+        incomplete = calibrated_output("codec").replace(",sample,20,", ",sample,19,")
+        subprocess_run.return_value = subprocess.CompletedProcess([], 0, incomplete, "")
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            status = benchmark.main([
+                "--bin-dir", str(self.bin_dir), "--output-dir", str(self.output_dir),
+            ])
+        self.assertEqual((status, stdout.getvalue()), (1, ""))
+        self.assertIn("out-of-order", stderr.getvalue())
+        self.assertEqual((self.output_dir / "raw/codec-automatic-1.stdout").read_text(), incomplete)
+        self.assertEqual(json.loads((self.output_dir / "metadata.json").read_text())["status"], "failed")
+        self.assertFalse((self.output_dir / "results.json").exists())
+
+    def test_calibrated_rejects_unsupported_overrides(self):
+        for arguments in (["--codec-repeats", "1"], ["--suite", "full", "--sampling", "calibrated"]):
+            with self.subTest(arguments=arguments), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    benchmark.main(arguments)
+                self.assertEqual(raised.exception.code, 2)
 
     @mock.patch.object(benchmark.subprocess, "run")
     def test_core_rejects_missing_samples_and_full_output_without_publishing(self, subprocess_run):
@@ -444,7 +570,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(sum(len(values) for name, values in samples.items() if name.startswith("formscan/")), 900)
         metadata = json.loads((self.output_dir / "metadata.json").read_text())
         self.assertEqual(metadata["status"], "complete")
-        self.assertEqual(metadata["harness_version"], 4)
+        self.assertEqual(metadata["harness_version"], 5)
+        self.assertEqual(metadata["sampling_policy"], {"mode": "fixed"})
         self.assertEqual(metadata["suite"], "full")
         self.assertEqual(metadata["benchmark_count"], 1356)
         self.assertEqual(metadata["commit"], "test-commit")

@@ -23,7 +23,14 @@ import sys
 import time
 
 
-HARNESS_VERSION = 4
+HARNESS_VERSION = 5
+CALIBRATED_POLICY = {
+    "mode": "calibrated",
+    "samples_per_case": 20,
+    "min_sample_ms": 50,
+    "target_sample_ms": 100,
+    "warmup_ms": 100,
+}
 VALIDATION_REPEATS = 5
 FORMSCAN_REPEATS = 5
 HELPER_REPEATS = 5
@@ -92,6 +99,99 @@ CORE_CASES = {
 
 class BenchmarkError(Exception):
     """The benchmark did not produce a complete, usable measurement."""
+
+
+def core_names(family=None):
+    names = set()
+    for group, cases in CORE_CASES.items():
+        if family is not None and family != group:
+            continue
+        for case in cases:
+            parts = (group, *case)
+            if group in ("codec", "formscan"):
+                parts += ("simdurl",)
+            names.add("/".join((*parts, "automatic")))
+    return names
+
+
+def validate_calibrated_batches(batches, expected_names=None):
+    """Reconstruct scores only from complete, sufficiently long measurements.
+
+    Shared with the Azure evidence gate so metadata cannot claim a different
+    sampling policy from the batches that actually produced the scores.
+    """
+    expected = core_names() if expected_names is None else expected_names
+    if not isinstance(batches, dict) or set(batches) != expected:
+        raise BenchmarkError("Calibrated benchmark case set does not match the core suite")
+    samples = {}
+    for name, records in batches.items():
+        if not isinstance(records, list):
+            raise BenchmarkError(f"Invalid calibrated batches for {name}")
+        values = []
+        warmup_ns = 0
+        calibrated = False
+        stage = "warmup"
+        for record in records:
+            if len(values) == CALIBRATED_POLICY["samples_per_case"]:
+                raise BenchmarkError(f"Unexpected batches after the final sample for {name}")
+            if (not isinstance(record, dict)
+                    or set(record) != {"phase", "sample", "iterations", "elapsed_ns"}
+                    or any(type(record.get(field)) is not int for field in
+                           ("sample", "iterations", "elapsed_ns"))
+                    or record["iterations"] <= 0 or record["elapsed_ns"] < 0):
+                raise BenchmarkError(f"Invalid calibrated batch for {name}")
+            phase, index, elapsed = record["phase"], record["sample"], record["elapsed_ns"]
+            if phase not in ("warmup", "calibration", "sample", "retry"):
+                raise BenchmarkError(f"Unknown calibrated batch phase for {name}")
+            if phase != "sample" and index != 0:
+                raise BenchmarkError(f"Discarded batches must have sample index zero for {name}")
+            if phase == "warmup":
+                if stage != "warmup":
+                    raise BenchmarkError(f"Warmup must precede calibration and sampling for {name}")
+                warmup_ns += elapsed
+                continue
+            if warmup_ns < CALIBRATED_POLICY["warmup_ms"] * 1_000_000:
+                raise BenchmarkError(f"Insufficient discarded warmup for {name}")
+            if phase == "calibration":
+                stage = "calibration"
+                calibrated = elapsed >= CALIBRATED_POLICY["target_sample_ms"] * 1_000_000
+                continue
+            if not calibrated:
+                raise BenchmarkError(f"Missing completed calibration for {name}")
+            stage = "sample"
+            if phase == "retry":
+                if elapsed >= CALIBRATED_POLICY["min_sample_ms"] * 1_000_000:
+                    raise BenchmarkError(f"Only short samples may be retried for {name}")
+                continue
+            if index != len(values) + 1:
+                raise BenchmarkError(f"Duplicate or out-of-order calibrated sample for {name}")
+            if elapsed < CALIBRATED_POLICY["min_sample_ms"] * 1_000_000:
+                raise BenchmarkError(f"Calibrated sample is too short for {name}")
+            values.append(positive_number(elapsed / record["iterations"], "calibrated ns/op"))
+        if len(values) != CALIBRATED_POLICY["samples_per_case"] or stage != "sample":
+            raise BenchmarkError(f"Incomplete calibrated samples for {name}")
+        samples[name] = values
+    return samples
+
+
+def parse_calibrated(output, family):
+    lines = output.splitlines()
+    if lines[:2] != ["# simdurl calibrated v1", "benchmark,phase,sample,iterations,elapsed_ns"]:
+        raise BenchmarkError("Unexpected calibrated benchmark header")
+    batches = {}
+    try:
+        for fields in csv.reader(io.StringIO("\n".join(lines[2:-1])), strict=True):
+            if len(fields) != 5 or any(not re.fullmatch(r"[0-9]+", v) for v in fields[2:]):
+                raise BenchmarkError(f"Malformed calibrated benchmark row: {fields!r}")
+            name, phase, sample, iterations, elapsed_ns = fields
+            batches.setdefault(name, []).append({
+                "phase": phase, "sample": int(sample), "iterations": int(iterations),
+                "elapsed_ns": int(elapsed_ns),
+            })
+    except csv.Error as error:
+        raise BenchmarkError(f"Malformed calibrated CSV: {error}") from error
+    samples = validate_calibrated_batches(batches, core_names(family))
+    return samples, checksum(lines[-1], "# checksum: "), batches
 
 
 def positive_number(value, label):
@@ -332,9 +432,11 @@ def machine_metadata():
     return metadata
 
 
-def run_process(executable, iterations, raw_dir, label, timeout, runs, suite="full"):
+def run_process(executable, iterations, raw_dir, label, timeout, runs, suite="full", sampling="fixed"):
     command = [str(executable), str(iterations)]
-    if suite == "core":
+    if sampling == "calibrated":
+        command.append("--calibrated")
+    elif suite == "core":
         command.append("--core")
     record = {"command": command, "label": label}
     runs.append(record)
@@ -368,6 +470,8 @@ def run_process(executable, iterations, raw_dir, label, timeout, runs, suite="fu
 
 
 def run(args):
+    calibrated = args.sampling == "calibrated"
+    repeats = CALIBRATED_POLICY["samples_per_case"] if calibrated else 5
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     if any(output_dir.iterdir()):
@@ -377,18 +481,21 @@ def run(args):
     metadata = {
         "harness_version": HARNESS_VERSION,
         "suite": args.suite,
+        "sampling_policy": dict(CALIBRATED_POLICY) if calibrated else {"mode": "fixed"},
         "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "commit": args.commit,
         "machine": machine_metadata(),
         "codec_iterations": args.codec_iterations,
         "codec_repeats": args.codec_repeats,
         "validation_iterations": args.validation_iterations,
-        "validation_repeats": VALIDATION_REPEATS,
+        "validation_repeats": repeats,
         "formscan_iterations": args.formscan_iterations,
-        "formscan_repeats": FORMSCAN_REPEATS,
-        "formscan_iteration_scaling": "max(1, base_iterations // ceil(length / 64))",
+        "formscan_repeats": repeats,
+        "formscan_iteration_scaling": "max(1, base_iterations // ceil(length / 64))" +
+            (" for initial seed only; then calibrated per case" if calibrated else ""),
         "helper_iterations": args.helper_iterations,
-        "helper_repeats": HELPER_REPEATS,
+        "helper_repeats": repeats,
+        "iteration_policy": "initial seeds; actual counts recorded in batches" if calibrated else "fixed",
         "timer": "process CPU time (C clock)",
         "measure": "latency (nanoseconds per operation)",
         "summary": "median with observed minimum and maximum",
@@ -397,12 +504,14 @@ def run(args):
         "runs": [],
         "status": "running",
     }
+    if calibrated:
+        metadata["batches"] = {}
     samples = {}
     checksums = {}
     try:
         # Alternate builds between process repeats to reduce order bias.
         for family, repeats, iterations, parse, suffix in (
-            ("codec", args.codec_repeats, args.codec_iterations, parse_codec, ""),
+            ("codec", 1 if calibrated else args.codec_repeats, args.codec_iterations, parse_codec, ""),
             ("validate", 1, args.validation_iterations, parse_validation, "_validate"),
             ("formscan", 1, args.formscan_iterations, parse_formscan, "_formscan"),
             ("helpers", 1, args.helper_iterations, parse_helpers, "_helpers"),
@@ -426,8 +535,12 @@ def run(args):
                         }
                     label = f"{family}-{build}-{repeat + 1}"
                     output = run_process(executable, iterations, raw_dir, label, args.timeout,
-                                         metadata["runs"], args.suite)
-                    parsed, observed_checksum = parse(output, build, iterations, args.suite)
+                                         metadata["runs"], args.suite, args.sampling)
+                    if calibrated:
+                        parsed, observed_checksum, batches = parse_calibrated(output, family)
+                        metadata["batches"].update(batches)
+                    else:
+                        parsed, observed_checksum = parse(output, build, iterations, args.suite)
                     if family in checksums and checksums[family] != observed_checksum:
                         raise BenchmarkError(f"{family} checksums differ between repeated runs or builds")
                     checksums[family] = observed_checksum
@@ -463,10 +576,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=("core", "full"), default="core",
                         help="core: ten regression benchmarks (default); full: diagnostic matrix")
+    parser.add_argument("--sampling", choices=("calibrated", "fixed"),
+                        help="default: calibrated for core, fixed for full; fixed also supports quick smoke tests")
     parser.add_argument("--bin-dir", type=Path, default=Path("build/benchmarks"))
     parser.add_argument("--output-dir", type=Path, default=Path("benchmark-results"), help="empty directory for raw output and metadata")
-    parser.add_argument("--codec-iterations", type=positive_int, default=100000)
-    parser.add_argument("--codec-repeats", type=positive_int, default=5)
+    parser.add_argument("--codec-iterations", type=positive_int, default=100000,
+                        help="fixed iterations, or initial calibration seed")
+    parser.add_argument("--codec-repeats", type=positive_int,
+                        help="fixed sampling only (default: 5); calibrated sampling always collects 20")
     parser.add_argument("--validation-iterations", type=positive_int, default=100000)
     parser.add_argument("--formscan-iterations", type=positive_int, default=100000,
                         help="base iterations per formscan sample, scaled down above 64 bytes")
@@ -475,6 +592,15 @@ def main(argv=None):
     parser.add_argument("--timeout", type=positive_int, default=120, help="timeout in seconds per executable invocation")
     parser.add_argument("--commit", help="source commit SHA to record in metadata")
     args = parser.parse_args(argv)
+    args.sampling = args.sampling or ("calibrated" if args.suite == "core" else "fixed")
+    if args.sampling == "calibrated":
+        if args.suite != "core":
+            parser.error("calibrated sampling requires --suite core")
+        if args.codec_repeats is not None:
+            parser.error("--codec-repeats requires --sampling fixed")
+        args.codec_repeats = CALIBRATED_POLICY["samples_per_case"]
+    elif args.codec_repeats is None:
+        args.codec_repeats = 5
     try:
         result = run(args)
     except (BenchmarkError, OSError, ValueError) as error:

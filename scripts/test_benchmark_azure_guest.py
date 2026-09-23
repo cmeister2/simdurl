@@ -352,11 +352,13 @@ class GuestTests(unittest.TestCase):
         self.assertEqual(command[command.index("--cpuset-cpus") + 1], "2")
         self.assertEqual(command[command.index("--network") + 1], "none")
         self.assertEqual(command[command.index("-e") + 1], "SIMDURL_BENCH_REQUIRE_VBMI2=1")
-        self.assertEqual(command[-3:], [self.image_id, "--suite", "core"])
+        self.assertEqual(command[-5:], [self.image_id, "--suite", "core", "--sampling", "calibrated"])
         self.assertIn("no-new-privileges", command)
         self.assertIn("--pull=never", command)
         smoke = guest.benchmark_command(self.image_id, 2, "test-container", True)
         self.assertEqual(smoke[smoke.index("--suite") + 1], "core")
+        self.assertEqual(command[command.index("--sampling") + 1], "calibrated")
+        self.assertEqual(smoke[smoke.index("--sampling") + 1], "fixed")
         self.assertIn("--codec-iterations", smoke)
 
     def test_streamed_output_limit_stops_process_and_keeps_bounded_partial_logs(self):

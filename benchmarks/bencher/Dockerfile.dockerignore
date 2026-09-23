@@ -11,6 +11,7 @@
 !benchmarks/bench_validate.c
 !benchmarks/bench_formscan.c
 !benchmarks/bench_helpers.c
+!benchmarks/bench_sampling.h
 !benchmarks/bencher/
 !benchmarks/bencher/Dockerfile
 !benchmarks/bencher/Dockerfile.dockerignore

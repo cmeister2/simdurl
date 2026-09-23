@@ -41,14 +41,28 @@ def run_manifest():
     }
 
 
-def evidence_fixture():
+def evidence_fixture(*, smoke=False):
     records = [{"operation": op, "backend": "vbmi2", "compiled": "1", "executed": "1",
                 "skipped": "0", "cases": "20", "kernel_calls": "40"} for op in ("encode", "decode")]
     stdout = "\n".join("SIMDURL_BACKEND " + " ".join(f"{key}={value}" for key, value in record.items())
                        for record in records)
-    samples = {name: [1.0, 2.0, 3.0, 4.0, 5.0] for name in azure.expected_cases()}
-    metadata = {"status": "complete", "commit": COMMIT, "suite": "core", "benchmark_count": 10, "codec_repeats": 5,
-                "validation_repeats": 5, "formscan_repeats": 5, "helper_repeats": 5}
+    repeats = 5 if smoke else 20
+    samples = {name: [1.0] if smoke and name.startswith("codec/") else
+               [(100_000_000 + sample * 1_000_000) / 10_000_000 for sample in range(repeats)]
+               for name in azure.expected_cases()}
+    metadata = {"status": "complete", "commit": COMMIT, "suite": "core", "benchmark_count": 10,
+                "harness_version": 5, "codec_repeats": 1 if smoke else repeats,
+                "validation_repeats": repeats, "formscan_repeats": repeats, "helper_repeats": repeats,
+                "sampling_policy": {"mode": "fixed"} if smoke else {
+                    "mode": "calibrated", "samples_per_case": 20, "min_sample_ms": 50,
+                    "target_sample_ms": 100, "warmup_ms": 100}}
+    if not smoke:
+        metadata["batches"] = {
+            name: [{"phase": phase, "sample": 0, "iterations": 10_000_000, "elapsed_ns": 100_000_000}
+                   for phase in ("warmup", "calibration")] +
+                  [{"phase": "sample", "sample": sample + 1, "iterations": 10_000_000,
+                    "elapsed_ns": 100_000_000 + sample * 1_000_000} for sample in range(repeats)]
+            for name in samples}
     evidence = {"source_sha": COMMIT, "exit_code": 0, "dispatch": {"encode": "vbmi2", "decode": "vbmi2"},
                 "preflight": {"status": "passed", "require_vbmi2": True,
                               "native_tests": {"exit_code": 0, "stdout": stdout, "records": records}},
@@ -524,16 +538,72 @@ class EvidenceTests(unittest.TestCase):
                 with self.assertRaises(azure.AzureError):
                     azure.validate_result(self.directory, self.record)
 
-    def test_smoke_changes_only_codec_repetitions(self):
-        samples = {name: values[:1] if name.startswith("codec/") else values for name, values in self.samples.items()}
-        metadata = json.loads(self.evidence["files"]["metadata.json"])
-        metadata["codec_repeats"] = 1
-        self.evidence["files"].update({"samples.json": json.dumps(samples), "metadata.json": json.dumps(metadata)})
-        write_result(self.directory, self.evidence, samples)
-        with self.assertRaisesRegex(azure.AzureError, "repetition"):
+    def test_fixed_smoke_is_accepted_only_for_an_explicit_smoke_run(self):
+        evidence, samples = evidence_fixture(smoke=True)
+        write_result(self.directory, evidence, samples)
+        with self.assertRaisesRegex(azure.AzureError, "sampling policy"):
             azure.validate_result(self.directory, self.record)
         self.record["smoke"] = True
         self.assertEqual(len(azure.validate_result(self.directory, self.record)), 10)
+
+    def test_old_harness_and_changed_sampling_policy_are_rejected(self):
+        metadata = json.loads(self.evidence["files"]["metadata.json"])
+        policy = metadata["sampling_policy"]
+        for changes in ({"harness_version": 4}, {"harness_version": 5.0},
+                        {"sampling_policy": {"mode": "fixed"}},
+                        {"sampling_policy": policy | {"samples_per_case": 5}},
+                        {"sampling_policy": policy | {"min_sample_ms": 1}},
+                        {"sampling_policy": policy | {"target_sample_ms": 50}},
+                        {"sampling_policy": policy | {"warmup_ms": 0}}):
+            with self.subTest(changes=changes):
+                self.evidence["files"]["metadata.json"] = json.dumps(metadata | changes)
+                write_result(self.directory, self.evidence, self.samples)
+                with self.assertRaisesRegex(azure.AzureError, "harness version|sampling policy"):
+                    azure.validate_result(self.directory, self.record)
+
+    def test_every_family_requires_twenty_calibrated_samples(self):
+        metadata = json.loads(self.evidence["files"]["metadata.json"])
+        for field in ("codec_repeats", "validation_repeats", "formscan_repeats", "helper_repeats"):
+            for count in (5, True, 20.0):
+                with self.subTest(field=field, count=count):
+                    self.evidence["files"]["metadata.json"] = json.dumps(metadata | {field: count})
+                    write_result(self.directory, self.evidence, self.samples)
+                    with self.assertRaisesRegex(azure.AzureError, "repetition"):
+                        azure.validate_result(self.directory, self.record)
+
+    def test_calibrated_evidence_requires_warmup_calibration_and_long_samples(self):
+        original = json.loads(self.evidence["files"]["metadata.json"])
+        name = next(iter(self.samples))
+        for index, changes in ((0, {"elapsed_ns": 99_999_999}),
+                               (1, {"elapsed_ns": 99_999_999}),
+                               (2, {"elapsed_ns": 49_999_999}),
+                               (2, {"iterations": 0}),
+                               (2, {"sample": 2})):
+            with self.subTest(index=index, changes=changes):
+                metadata = copy.deepcopy(original)
+                metadata["batches"][name][index].update(changes)
+                self.evidence["files"]["metadata.json"] = json.dumps(metadata)
+                write_result(self.directory, self.evidence, self.samples)
+                with self.assertRaisesRegex(azure.AzureError, "calibrated sampling evidence"):
+                    azure.validate_result(self.directory, self.record)
+
+    def test_calibrated_batch_evidence_must_cover_all_cases(self):
+        original = json.loads(self.evidence["files"]["metadata.json"])
+        incomplete = copy.deepcopy(original["batches"])
+        incomplete.pop(next(iter(incomplete)))
+        for batches in (None, {}, incomplete):
+            with self.subTest(batches=batches is None):
+                self.evidence["files"]["metadata.json"] = json.dumps(original | {"batches": batches})
+                write_result(self.directory, self.evidence, self.samples)
+                with self.assertRaisesRegex(azure.AzureError, "calibrated sampling evidence"):
+                    azure.validate_result(self.directory, self.record)
+
+    def test_raw_samples_must_match_batch_measurements_even_when_summary_matches(self):
+        self.samples[next(iter(self.samples))][0] += 1
+        self.evidence["files"]["samples.json"] = json.dumps(self.samples)
+        write_result(self.directory, self.evidence, self.samples)
+        with self.assertRaisesRegex(azure.AzureError, "calibrated batch measurements"):
+            azure.validate_result(self.directory, self.record)
 
 
 class FakeAzure:

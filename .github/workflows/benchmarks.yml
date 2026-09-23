@@ -114,7 +114,7 @@ jobs:
           printf '%s\n' "$image" > evidence/image.txt
           status=0
           bencher run --project simdurl --branch main --hash "$SOURCE_SHA" \
-            --testbed intel-v1-gcc15-v1 --spec intel-v1 --adapter json \
+            --testbed intel-v1-gcc15-v2 --spec intel-v1 --adapter json \
             --image "$image" --job-timeout 300 --format json --quiet > evidence/report.json 2> >(tee evidence/bencher.log >&2) || status=$?
           if job=$(jq -er '.job // empty' evidence/report.json); then
             bencher job view simdurl "$job" > evidence/job.json || status=1
@@ -328,7 +328,7 @@ jobs:
           test -n "$BENCHER_API_KEY"
           mkdir -p publication
           bencher run --project simdurl --branch main --hash "$SOURCE_SHA" \
-            --testbed azure-d2s-v6-gcc15-v1 --adapter json \
+            --testbed azure-d2s-v6-gcc15-v2 --adapter json \
             --file evidence/results.json --format json --quiet \
             > publication/report.json 2> >(tee publication/bencher.log >&2)
           printf 'Azure VBMI2 results recorded for commit `%s`. [Benchmark history](https://bencher.dev/perf/simdurl)\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
