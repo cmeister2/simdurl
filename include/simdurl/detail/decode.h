@@ -106,8 +106,12 @@ simdurl_detail_decode_blocks(const char **input, size_t *remaining,
         return 0;
       result = _mm256_maskz_compress_epi8((__mmask32)keep, result);
       /* Separate buffers permit a full-vector store. In-place decoding must
-       * preserve unconsumed bytes at positions 30 and 31. */
-      memcpy(ns, &result, in_place ? count : sizeof(result));
+       * preserve unconsumed bytes at positions 30 and 31. Keep the fixed-size
+       * copy separate so compilers can emit a vector store. */
+      if(in_place)
+        memcpy(ns, &result, count);
+      else
+        memcpy(ns, &result, sizeof(result));
       ns += count;
       string += consumed;
       alloc -= consumed;
