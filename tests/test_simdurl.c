@@ -1,6 +1,16 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Max Dymond
  */
+/* Expose anonymous mappings in strict C99 test builds before libc headers. */
+#if defined(SIMDURL_TEST_POSIX)
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+#endif
+
 #include <simdurl.h>
 
 #include <limits.h>
@@ -10,9 +20,13 @@
 #include <string.h>
 
 #if defined(SIMDURL_TEST_POSIX)
-#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#if defined(MAP_ANONYMOUS)
+#define SIMDURL_TEST_MAP_ANON MAP_ANONYMOUS
+#else
+#define SIMDURL_TEST_MAP_ANON MAP_ANON
+#endif
 #endif
 
 /* Deliberately independent of assert(): Release builds test the same checks. */
@@ -468,16 +482,21 @@ static void test_guard_pages(void)
   long page_size_value = sysconf(_SC_PAGESIZE);
   size_t page_size, length, pattern;
   unsigned char *source_pages, *output_pages;
-  int descriptor = open("/dev/zero", O_RDWR);
   context = "guard pages";
-  CHECK(page_size_value > 0 && descriptor >= 0);
+  case_length = 0;
+  case_flags = 0;
+  CHECK(page_size_value > 0);
   page_size = (size_t)page_size_value;
   source_pages = (unsigned char *)mmap(NULL, page_size * 2,
-    PROT_READ | PROT_WRITE, MAP_PRIVATE, descriptor, 0);
+    PROT_READ | PROT_WRITE, MAP_PRIVATE | SIMDURL_TEST_MAP_ANON, -1, 0);
+  if(source_pages == MAP_FAILED)
+    perror("mmap source guard pages");
+  CHECK(source_pages != MAP_FAILED);
   output_pages = (unsigned char *)mmap(NULL, page_size * 2,
-    PROT_READ | PROT_WRITE, MAP_PRIVATE, descriptor, 0);
-  CHECK(source_pages != MAP_FAILED && output_pages != MAP_FAILED);
-  CHECK(close(descriptor) == 0);
+    PROT_READ | PROT_WRITE, MAP_PRIVATE | SIMDURL_TEST_MAP_ANON, -1, 0);
+  if(output_pages == MAP_FAILED)
+    perror("mmap output guard pages");
+  CHECK(output_pages != MAP_FAILED);
   CHECK(mprotect(source_pages + page_size, page_size, PROT_NONE) == 0);
   CHECK(mprotect(output_pages + page_size, page_size, PROT_NONE) == 0);
   for(length = 0; length <= 192; ++length) {
