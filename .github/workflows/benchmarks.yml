@@ -215,7 +215,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Retrieve the built image
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: azure-image-${{ github.run_id }}-${{ matrix.commit }}
           path: image/
@@ -226,7 +226,7 @@ jobs:
             --archive image/image.tar --image "$AZURE_IMAGE" \
             --image-id-file image/image-id.txt --evidence-dir image
       - name: Sign in to Azure with GitHub OIDC
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -279,7 +279,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Sign in to Azure with GitHub OIDC
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -311,7 +311,7 @@ jobs:
     # This job reads saved JSON and has no Azure permission or source execution.
     steps:
       - name: Retrieve saved Azure results
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: azure-evidence-${{ github.run_id }}-${{ matrix.commit }}
           path: evidence/
