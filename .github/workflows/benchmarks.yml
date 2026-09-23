@@ -37,10 +37,20 @@ jobs:
         run: |
           python3 -m unittest discover -s scripts -p 'test_benchmark*.py'
           python3 -m unittest discover -s infra/azure -p 'test_*.py'
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the smoke-test image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: benchmarks/bencher/Dockerfile
+          platforms: linux/amd64
+          build-args: SOURCE_SHA=${{ github.sha }}
+          tags: simdurl-bencher:smoke
+          load: true
+          provenance: false
       - name: Smoke-test the benchmark image without credentials
         run: |
-          docker build --platform linux/amd64 --provenance=false --file benchmarks/bencher/Dockerfile \
-            --build-arg "SOURCE_SHA=$GITHUB_SHA" --tag simdurl-bencher:smoke .
           # Exercise the hosted Docker store's export format before Azure allocation.
           docker save --output "$RUNNER_TEMP/benchmark-image.tar" simdurl-bencher:smoke
           PYTHONPATH=scripts python3 - "$RUNNER_TEMP/benchmark-image.tar" <<'PY'
@@ -103,6 +113,7 @@ jobs:
       matrix: ${{ fromJSON(needs.commits.outputs.matrix) }}
     env:
       SOURCE_SHA: ${{ matrix.commit }}
+      BENCHER_IMAGE: registry.bencher.dev/simdurl:${{ matrix.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check out the benchmark harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -119,25 +130,38 @@ jobs:
         uses: bencherdev/bencher@8d75325c3bc59403a2186a056b472c4f49d42838 # v0.6.12
         with:
           version: 0.6.12
-      - name: Build the benchmark image
+      - name: Prepare the benchmark build context
         run: |
           printf 'DOCKER_CONFIG=%s\n' "$RUNNER_TEMP/bencher-docker" >> "$GITHUB_ENV"
-          mkdir -p evidence "$RUNNER_TEMP/benchmark-context"
+          mkdir -p evidence "$RUNNER_TEMP/bencher-docker" "$RUNNER_TEMP/benchmark-context"
           cp -R source/include source/src harness/benchmarks harness/scripts harness/tests "$RUNNER_TEMP/benchmark-context/"
-          image="registry.bencher.dev/simdurl:${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker build --platform linux/amd64 \
-            --file "$RUNNER_TEMP/benchmark-context/benchmarks/bencher/Dockerfile" \
-            --build-arg "SOURCE_SHA=$SOURCE_SHA" --tag "$image" "$RUNNER_TEMP/benchmark-context"
-          printf 'BENCHER_IMAGE=%s\n' "$image" >> "$GITHUB_ENV"
           git -C harness rev-parse HEAD > evidence/harness-sha.txt
-      - name: Upload the image and run on Bencher hardware
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Sign in to the Bencher registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: registry.bencher.dev
+          username: simdurl
+          password: ${{ secrets.BENCHER_SECRET }}
+      - name: Build and push the benchmark image
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/benchmark-context
+          file: ${{ runner.temp }}/benchmark-context/benchmarks/bencher/Dockerfile
+          platforms: linux/amd64
+          build-args: SOURCE_SHA=${{ env.SOURCE_SHA }}
+          tags: ${{ env.BENCHER_IMAGE }}
+          push: true
+      - name: Run on Bencher hardware
         env:
           BENCHER_API_KEY: ${{ secrets.BENCHER_SECRET }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           test -n "$BENCHER_API_KEY"
-          printf '%s' "$BENCHER_API_KEY" | docker login registry.bencher.dev --username simdurl --password-stdin
-          docker push "$BENCHER_IMAGE"
-          image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$BENCHER_IMAGE")
+          test -n "$IMAGE_DIGEST"
+          image="registry.bencher.dev/simdurl@$IMAGE_DIGEST"
           printf '%s\n' "$image" > evidence/image.txt
           status=0
           bencher run --project simdurl --branch main --hash "$SOURCE_SHA" \
@@ -148,9 +172,6 @@ jobs:
           fi
           test "$status" -eq 0
           printf 'Bencher recorded commit `%s`. [Benchmark history](https://bencher.dev/perf/simdurl)\n' "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
-      - name: Remove temporary registry credentials
-        if: always()
-        run: rm -rf "$DOCKER_CONFIG"
       - name: Retain the report and raw measurement evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -186,14 +207,25 @@ jobs:
           ref: ${{ matrix.commit }}
           path: source
           persist-credentials: false
-      - name: Build and archive one commit
+      - name: Prepare the Azure build context
         run: |
           mkdir -p image "$RUNNER_TEMP/azure-benchmark-context"
           cp -R source/include source/src harness/benchmarks harness/scripts harness/tests "$RUNNER_TEMP/azure-benchmark-context/"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build one commit for Azure
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/azure-benchmark-context
+          file: ${{ runner.temp }}/azure-benchmark-context/benchmarks/bencher/Dockerfile
+          platforms: linux/amd64
+          build-args: SOURCE_SHA=${{ env.SOURCE_SHA }}
+          tags: ${{ env.AZURE_IMAGE }}
+          load: true
           # The archive contract is one executable image, without attestation manifests.
-          docker build --platform linux/amd64 --provenance=false \
-            --file "$RUNNER_TEMP/azure-benchmark-context/benchmarks/bencher/Dockerfile" \
-            --build-arg "SOURCE_SHA=$SOURCE_SHA" --tag "$AZURE_IMAGE" "$RUNNER_TEMP/azure-benchmark-context"
+          provenance: false
+      - name: Archive and verify the Azure image
+        run: |
           docker save --output image/image.tar "$AZURE_IMAGE"
           sha256sum image/image.tar > image/image.tar.sha256
           docker image inspect --format '{{.Id}}' "$AZURE_IMAGE" > image/image-id.txt

@@ -11,13 +11,22 @@ testbed and uses one source commit per allocation.
 
 The `benchmark` job uses the GitHub environment named `Benchmarking`. Its
 `BENCHER_SECRET` secret must contain the project's Bencher run key. The workflow
-maps that secret to the CLI's `BENCHER_API_KEY` environment variable only while
-uploading the image and submitting the run. A user API key is not needed in CI.
+uses it with `docker/login-action` for registry authentication and maps it to
+the CLI's `BENCHER_API_KEY` only while submitting the run. A user API key is not
+needed in CI.
+
+All three image builds use pinned `docker/setup-buildx-action` and
+`docker/build-push-action` releases with explicit filesystem contexts. The
+hosted lane pushes directly to Bencher's registry and submits the build action's
+immutable image digest. Tooling and Azure builds load the image locally for
+archive verification; their action inputs include `provenance: false`.
 
 Local `.env` and `.env.*` files are ignored by Git. The Docker build context
 uses an allowlist, and the final image contains the benchmark executables,
 native backend tests, Python harness, runtime, and build metadata. Neither key is passed into the
-image. Registry credentials use a temporary Docker configuration.
+image. Registry credentials use a temporary Docker configuration, and the login
+action logs out during its cleanup. The builder action removes its builder after
+the build action has finished exporting its records.
 
 Pull requests run the exporter/range tests and a short container smoke check
 without credentials or network access inside the container. These checks do

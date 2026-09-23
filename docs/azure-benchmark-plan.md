@@ -110,9 +110,11 @@ The benchmark harness separately supports `--suite full` for local diagnostic
 runs of 1,356 series across ten executables, including scalar and compiled builds.
 The native VBMI2 correctness gate is unchanged by the smaller measurement set.
 
-Azure images use `--provenance=false` so Docker exports exactly one executable
-image. Docker's default provenance adds a separate attestation manifest when the
-builder uses the containerd image store; the archive validator deliberately
+The pinned `docker/build-push-action` builds Azure images with `load: true` and
+`provenance: false` so Docker exports exactly one executable image. Local builds
+use the equivalent `--provenance=false`. Docker's default provenance adds a
+separate attestation manifest when the builder uses the containerd image store;
+the archive validator deliberately
 requires a single image. PR tooling now validates the actual saved archive on the
 hosted runner, and the Azure build repeats that validation before upload. Source
 and harness SHAs, archive hashes, and image identities remain in the run evidence.
