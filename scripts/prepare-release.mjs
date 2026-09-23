@@ -37,12 +37,6 @@ const stage = join(dist, ".stage");
 const packageName = `simdurl-${version}`;
 const stagedSource = join(stage, packageName);
 try {
-  await writeFile(cmakeFile, previousCmake.replace(versionPattern, (_, prefix) => `${prefix}${version}`));
-  await rm(build, { recursive: true, force: true });
-  run("cmake", ["-S", root, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DSIMDURL_BUILD_TESTS=ON"]);
-  run("cmake", ["--build", build, "--config", "Release", "--parallel"]);
-  run("ctest", ["--test-dir", build, "-C", "Release", "--output-on-failure"]);
-
   await rm(dist, { recursive: true, force: true });
   await mkdir(stagedSource, { recursive: true });
   for (const file of files) {
@@ -50,13 +44,19 @@ try {
     await mkdir(dirname(destination), { recursive: true });
     await cp(join(root, file), destination);
   }
+  // Stamp and test the packaged copy; releasing never edits or commits sources.
+  await writeFile(join(stagedSource, "CMakeLists.txt"),
+    previousCmake.replace(versionPattern, (_, prefix) => `${prefix}${version}`));
+  await rm(build, { recursive: true, force: true });
+  run("cmake", ["-S", stagedSource, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DSIMDURL_BUILD_TESTS=ON"]);
+  run("cmake", ["--build", build, "--config", "Release", "--parallel"]);
+  run("ctest", ["--test-dir", build, "-C", "Release", "--output-on-failure"]);
+
   const archive = join(dist, `${packageName}.tar.gz`);
   run("cmake", ["-E", "tar", "czf", archive, "--format=gnutar", packageName], { cwd: stage });
   const checksum = createHash("sha256").update(await readFile(archive)).digest("hex");
   await writeFile(join(dist, "SHA256SUMS"), `${checksum}  ${packageName}.tar.gz\n`);
-  await rm(stage, { recursive: true, force: true });
   console.log(`Prepared ${archive}`);
-} catch (error) {
-  await writeFile(cmakeFile, previousCmake);
-  throw error;
+} finally {
+  await rm(stage, { recursive: true, force: true });
 }

@@ -157,22 +157,12 @@ unaligned and in-place buffers, bounds checks, and protected-page boundaries on
 supported Unix systems. It also installs to a temporary prefix, relocates that
 prefix, and builds separate consumers of both CMake targets.
 
-GitHub Actions covers Linux GCC/Clang, macOS ARM64, and Windows MSVC; shared/static
-builds, native tuning, IPO, and sanitizer configurations are included. AppVeyor
-adds MSYS2 UCRT64 GCC, CLANG64 Clang, legacy MINGW32 GCC, and Cygwin x64 GCC.
-Each AppVeyor job builds static and shared libraries, runs the full CTest suite
-including installed consumers, and smoke-tests both benchmark variants. MINGW32
-adds native 32-bit Windows coverage. ARM, MSVC, and 32-bit builds use the portable
-fallback. Performance depends on CPU, input length, escape density, and compiler
-settings; measure on your deployment workload.
-
-AppVeyor reuses preinstalled compilers and build tools when available. Otherwise,
-setup installs the missing toolchain and caches package downloads, retaining up
-to 128 MiB per matrix job (512 MiB across these four jobs). The native Windows
-jobs share the image's CMake and Ninja; Cygwin uses its own CMake and Make.
-Package caches reduce downloads but do not eliminate installation time. A
-successful branch build populates the caches; PRs restore them but do not save
-updates by default. See [AppVeyor's cache documentation](https://www.appveyor.com/docs/build-cache/).
+CI covers Linux GCC/Clang, macOS ARM64, and Windows MSVC, MSYS2, and Cygwin,
+including native 32-bit Windows builds. It checks static/shared libraries,
+installed CMake consumers, native tuning, IPO, and sanitizers. ARM, MSVC, and
+32-bit builds use the portable fallback. Performance depends on CPU, input
+length, escape density, and compiler settings; measure on your deployment
+workload.
 
 Optional benchmarks compare the same header-only workload with runtime SIMD
 selection and with SIMD disabled:
@@ -191,43 +181,12 @@ is measured in input bytes per second.
 
 ## Releases
 
-This project uses semantic-release, Conventional Commits,
-and plain version tags such as `1.2.3`. A successful push to `main` runs the build
-matrix, sanitizers, and source archive checks before releasing. Pull requests
-(including forks) and manual workflow runs preview the release version and notes
-without publishing. Push-triggered runs are limited to `main`, so updating a PR
-branch starts only the pull-request workflow. Branches without a PR can be tested
-with a manual workflow run. The required `Success` check runs last, after the
-release or preview job. AppVeyor reports a separate status; require that status
-too if its Windows toolchains should gate automerge.
+[GitHub Releases](https://github.com/cmeister2/simdurl/releases) provides source
+archives named `simdurl-<version>.tar.gz` and their `SHA256SUMS` checksums. Version
+tags use the form `1.2.3`.
 
-`fix:` commits cause patch releases, `feat:` commits cause minor releases, and
-breaking changes (`!` or a `BREAKING CHANGE:` footer) cause major releases.
-The first published release is `0.1.0`. The project version in `CMakeLists.txt`
-remains `0.0.0` until release preparation.
-
-Release preparation updates the project version in `CMakeLists.txt`, rebuilds
-and tests, and creates `simdurl-<version>.tar.gz` plus `SHA256SUMS`. A release
-commit records `CMakeLists.txt` before semantic-release tags it and publishes
-the source archive as a GitHub release. No npm package is published. GitHub's
-default `GITHUB_TOKEN` needs contents write permission; branch protection must permit the release job to
-push its version commit. Issue and pull-request comments are disabled.
-
-Node.js 24.10+ is needed only for release tooling:
-
-```sh
-npm ci --ignore-scripts
-npm run release:dry-run
-```
-
-The dry run uses the checked-out commit and fetched tags in a temporary local
-Git copy. It runs semantic-release's commit analysis, version calculation, and
-release-note generation without credentials or changes to the original checkout.
-It does not verify publishing permissions or upload assets; source-package CI
-separately tests archive preparation. To test archive preparation locally, run
-`npm run release:prepare -- 0.0.0` from a tracked Git checkout; this sets
-the CMake project version to the supplied value. Archives include only tracked
-files.
+Use the release archive for sources with versioned CMake package metadata.
+Repository checkouts use `0.0.0` as their development version.
 
 ## License
 

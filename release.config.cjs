@@ -7,10 +7,6 @@ module.exports = {
     ["@semantic-release/exec", {
       prepareCmd: "node scripts/prepare-release.mjs ${nextRelease.version}",
     }],
-    ["@semantic-release/git", {
-      assets: ["CMakeLists.txt"],
-      message: "chore(release): ${nextRelease.version} [skip ci]",
-    }],
     ["@semantic-release/github", {
       assets: [
         { path: "dist/simdurl-*.tar.gz", label: "Source archive" },
