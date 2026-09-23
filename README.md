@@ -172,7 +172,9 @@ directly, as described above.
 
 On any error, `written` is zero and the destination may be partially modified.
 SIMD stores may modify unused bytes within `output_capacity`; no write exceeds
-capacity and no read exceeds `input_length`. A NULL input is accepted only with
+capacity and no read exceeds `input_length`. If decoded input is forbidden and
+output capacity is also insufficient, either `SIMDURL_REJECTED` or
+`SIMDURL_BUFFER_TOO_SMALL` may be returned. A NULL input is accepted only with
 zero input length, and a NULL output only with zero output capacity.
 
 Encoding requires nonoverlapping buffers. Decoding permits exact in-place
@@ -186,10 +188,17 @@ Encoding accepts only `SIMDURL_URI` or `SIMDURL_FORM`.
 
 ## Validation
 
+The [safety testing guide](docs/testing.md) maps API guarantees to tests and
+explains boundary matrices, backend execution requirements, sanitizer builds,
+fuzzing, and release evidence. `SIMDURL_TEST_EXTENDED=ON` expands the memory
+matrix; `SIMDURL_TEST_REQUIRE_BACKEND=vbmi2` makes that backend's execution a
+requirement on a capable runner. `SIMDURL_BUILD_FUZZERS=ON` adds opt-in Clang
+libFuzzer targets and corpus replay tests.
+
 CTest exercises the compiled library, header-only and forced-portable variants,
 C++ translation units, exhaustive byte/hex cases, randomized reference checks,
 unaligned and in-place buffers, bounds checks, and protected-page boundaries on
-supported Unix systems. Scanner tests cover all 256 bytes and all eight check
+Unix and Windows. Scanner tests cover all 256 bytes and all eight check
 combinations, every vector lane, direct backend calls, exact allocations, and
 read-only guarded pages on Unix and Windows. Tests also install to a temporary
 prefix, relocate that prefix, and build separate consumers of both CMake targets.
