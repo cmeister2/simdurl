@@ -8,6 +8,7 @@
 #include "common.h"
 #include "encode.h"
 #include "decode.h"
+#include "scan.h"
 
 SIMDURL_DETAIL_INLINE simdurl_result
 simdurl_detail_encode_tail(const char *input, size_t remaining, char *output,
@@ -89,6 +90,28 @@ simdurl_detail_decode_tail(const char *input, size_t remaining, char *output,
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+SIMDURL_API simdurl_status simdurl_validate_bytes(const char *input,
+                                                size_t input_length,
+                                                unsigned int checks)
+{
+  int rejected;
+  if((checks & ~(unsigned int)(SIMDURL_CHECK_C0 | SIMDURL_CHECK_DEL |
+                              SIMDURL_CHECK_SPACE)) ||
+     (!input && input_length))
+    return SIMDURL_INVALID_ARGUMENT;
+  if(!checks || !input_length)
+    return SIMDURL_OK;
+#ifdef SIMDURL_DETAIL_X86
+  if(input_length >= 32 && simdurl_detail_has_avx2())
+    rejected = simdurl_detail_scan_avx2(input, input_length, checks);
+  else
+    rejected = simdurl_detail_scan_sse2(input, input_length, checks);
+#else
+  rejected = simdurl_detail_scan_portable(input, input_length, checks);
+#endif
+  return rejected ? SIMDURL_REJECTED : SIMDURL_OK;
+}
 
 SIMDURL_API size_t simdurl_encode_bound(size_t input_length)
 {

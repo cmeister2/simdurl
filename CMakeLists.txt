@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(simdurl VERSION 0.0.0 DESCRIPTION "SIMD URL encoding and decoding" LANGUAGES C)
+project(simdurl VERSION 0.0.0 DESCRIPTION "SIMD URL encoding, decoding and byte validation" LANGUAGES C)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -11,7 +11,7 @@ if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
 endif()
 option(SIMDURL_BUILD_TESTS "Build simdurl tests" ${SIMDURL_IS_TOP_LEVEL})
 option(SIMDURL_BUILD_BENCHMARKS "Build simdurl benchmarks" OFF)
-option(SIMDURL_DISABLE_SIMD "Use only the portable scalar implementation" OFF)
+option(SIMDURL_DISABLE_SIMD "Disable explicit SIMD backends (compiler vectorization remains enabled)" OFF)
 option(SIMDURL_NATIVE "Tune for the build machine (binaries may not run on other CPUs)" OFF)
 option(SIMDURL_ENABLE_IPO "Enable interprocedural optimization for the compiled library" OFF)
 

@@ -12,5 +12,9 @@ int simdurl_cpp_other()
   const simdurl_result result = simdurl_decode(decoded, sizeof(decoded) - 1,
                                               decoded, sizeof(decoded), SIMDURL_FORM);
   return result.status != SIMDURL_OK || result.written != sizeof(expected) ||
-         std::memcmp(decoded, expected, sizeof(expected)) != 0;
+         std::memcmp(decoded, expected, sizeof(expected)) != 0 ||
+         simdurl_validate_bytes(decoded, result.written, SIMDURL_CHECK_C0) !=
+           SIMDURL_REJECTED ||
+         simdurl_validate_bytes(decoded, result.written, SIMDURL_CHECK_DEL) !=
+           SIMDURL_OK;
 }
