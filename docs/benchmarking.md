@@ -47,8 +47,8 @@ Endpoints must belong to main's first-parent history. Split ranges larger than
 Backfilled reports retain the requested commit SHA, but charts follow report
 submission order rather than the original commit dates.
 
-The harness comes from the workflow revision, while library headers come from
-the requested commit. This holds the workload constant during a backfill.
+The harness comes from the workflow revision, while library headers and source come
+from the requested commit. This holds the workload constant during a backfill.
 Revisions before byte validation was introduced cannot build the complete
 current suite; do not interpret a missing benchmark as zero performance.
 
@@ -59,12 +59,29 @@ header-only benchmarks with `-std=c99 -O3 -DNDEBUG`, without `-march=native`.
 The scalar variants additionally define `SIMDURL_DISABLE_SIMD=1`; ordinary
 compiler vectorization remains enabled.
 
-The four executables produce 336 series: URI/form encoding and decoding,
-and byte validation with its independent C comparator, across both automatic
-SIMD and scalar builds. Every case has five samples. Bencher stores median
+The seven executables produce 516 series: the existing 72 codec and 264 byte
+validation series, plus 180 form-scanning series. Codec and validation use
+automatic and scalar header-only builds. Form scanning additionally measures
+a separately compiled library, linked without LTO. Every case has five samples.
+Bencher stores median
 **CPU-time nanoseconds per operation**, with observed minimum and maximum as
 bounds; these bounds are not confidence intervals. Codec elapsed time is
 converted to latency, so byte throughput is never mislabeled as operations/sec.
+
+The `formscan/` series use fixed-mode, non-inlined wrappers for URI and form
+decoding, with literal, plus-separated, percent-separated, and mixed inputs
+from 16 to 16,384 bytes. Long-marker cases use 256-byte literal runs and omit
+short inputs that would duplicate the literal case. The benchmark checks an
+independent decoding oracle outside timing. Its `automatic`, `scalar`, and
+`compiled` series keep the different calling and build arrangements separate.
+The scalar executable is named `simdurl_bench_formscan_portable`, matching CMake.
+
+Form scanning defaults to 100,000 iterations at 16/64 bytes, then scales to
+`max(1, base_iterations / ceil(length / 64))` for larger inputs. Each sample
+reports CPU nanoseconds per operation directly. Existing codec and validation
+workloads, iteration counts, and metric names are unchanged; adding these new
+series retains their existing testbed and comparison history. Form scanning
+runs after the original workloads, and harness metadata is version 2.
 
 The exporter rejects incomplete output, duplicate cases, nonpositive or
 nonfinite timing, failed subprocesses, and inconsistent checksums. Its case
@@ -91,6 +108,22 @@ digest, and harness revision. The remote job's stderr contains a
 raw executable output, individual timing samples, and machine metadata.
 Download these artifacts if you need your own longer-lived raw archive.
 
+The Bencher CLI can also download an individual report as JSON. To export its
+summary values as CSV (with the usual `BENCHER_API_KEY` environment variable):
+
+```sh
+bencher report view simdurl "$REPORT_UUID" > report.json
+jq -r '
+  (["benchmark", "measure", "value", "minimum", "maximum"] | @csv),
+  (.results[][] | .benchmark.name as $name | .measures[] |
+    [$name, .measure.slug, .metric.value, .metric.lower_value,
+     .metric.upper_value] | @csv)
+' report.json > report.csv
+```
+
+For individual samples and binary hashes, download the report's job with
+`bencher job view simdurl "$JOB_UUID"`; its stderr contains `simdurl_evidence`.
+
 The remote image has no network dependency. The hosted job has a five-minute
 execution limit; compilation occurs beforehand on GitHub Actions.
 
@@ -110,8 +143,8 @@ python3 scripts/benchmark.py --bin-dir build-bencher/benchmarks \
 The output directory must be empty. The command emits Bencher Metric Format
 JSON on stdout and saves the same metrics, raw output, metadata, and samples in
 the directory. Optional `--codec-iterations`, `--codec-repeats`, and
-`--validation-iterations` arguments support smoke checks. Very small iteration
-counts may round to zero and are rejected.
+`--validation-iterations` and `--formscan-iterations` arguments support smoke
+checks. Very small iteration counts may round to zero and are rejected.
 
 To exercise the exact container locally:
 

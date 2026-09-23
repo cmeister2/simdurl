@@ -41,6 +41,7 @@ jobs:
             --build-arg "SOURCE_SHA=$GITHUB_SHA" --tag simdurl-bencher:smoke .
           docker run --rm --network none simdurl-bencher:smoke \
             --codec-repeats 1 --codec-iterations 10000 --validation-iterations 10000 \
+            --formscan-iterations 20000 \
             > "$RUNNER_TEMP/benchmark-smoke.json" 2> "$RUNNER_TEMP/benchmark-smoke.log" || {
               cat "$RUNNER_TEMP/benchmark-smoke.log" >&2
               exit 1
@@ -101,7 +102,7 @@ jobs:
         run: |
           printf 'DOCKER_CONFIG=%s\n' "$RUNNER_TEMP/bencher-docker" >> "$GITHUB_ENV"
           mkdir -p evidence "$RUNNER_TEMP/benchmark-context"
-          cp -R source/include harness/benchmarks harness/scripts "$RUNNER_TEMP/benchmark-context/"
+          cp -R source/include source/src harness/benchmarks harness/scripts "$RUNNER_TEMP/benchmark-context/"
           image="registry.bencher.dev/simdurl:${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           docker build --platform linux/amd64 \
             --file "$RUNNER_TEMP/benchmark-context/benchmarks/bencher/Dockerfile" \
