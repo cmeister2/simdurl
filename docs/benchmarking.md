@@ -20,6 +20,9 @@ All three image builds use pinned `docker/setup-buildx-action` and
 hosted lane pushes directly to Bencher's registry and submits the build action's
 immutable image digest. Tooling and Azure builds load the image locally for
 archive verification; their action inputs include `provenance: false`.
+Workflow steps invoke [the image CLI](../scripts/benchmark_image.py) for archive
+verification and loading. Python logic lives in scripts with unit tests, not
+inline in workflow YAML.
 
 Local `.env` and `.env.*` files are ignored by Git. The Docker build context
 uses an allowlist, and the final image contains the benchmark executables,

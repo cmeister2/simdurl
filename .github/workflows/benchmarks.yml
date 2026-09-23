@@ -179,11 +179,8 @@ jobs:
           sha256sum image/image.tar > image/image.tar.sha256
           docker image inspect --format '{{.Id}}' "$AZURE_IMAGE" > image/image-id.txt
           git -C harness rev-parse HEAD > image/harness-sha.txt
-          PYTHONPATH=harness/scripts python3 - <<'PY'
-          from pathlib import Path
-          from benchmark_azure_guest import archive_image
-          archive_image(Path("image/image.tar"), Path("image/image-id.txt").read_text().strip())
-          PY
+          python3 harness/scripts/benchmark_image.py verify \
+            --archive image/image.tar --image "$AZURE_IMAGE" --image-id-file image/image-id.txt
       - name: Retain the image for Azure execution
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -225,28 +222,9 @@ jobs:
       - name: Verify and load the image without executing it
         run: |
           sha256sum --check image/image.tar.sha256
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-          import sys
-          sys.path.insert(0, "scripts")
-          from benchmark_azure_guest import archive_image
-          directory = Path("image")
-          identity = archive_image(directory / "image.tar", (directory / "image-id.txt").read_text().strip())
-          if identity["reference"] != os.environ["AZURE_IMAGE"]:
-              raise SystemExit("Archive tag does not match the requested benchmark image")
-          subprocess.run(["docker", "load", "--input", str(directory / "image.tar")], check=True)
-          loaded = subprocess.check_output([
-              "docker", "image", "inspect", "--format", "{{.Id}}", identity["reference"],
-          ], text=True).strip()
-          if loaded not in identity["image_ids"]:
-              raise SystemExit("Loaded Docker image is not proven by the archive")
-          (directory / "archive-image.json").write_text(json.dumps(identity, sort_keys=True) + "\n")
-          # The controller records this store's image ID in the run manifest.
-          (directory / "controller-image-id.txt").write_text(loaded + "\n")
-          PY
+          python3 scripts/benchmark_image.py load \
+            --archive image/image.tar --image "$AZURE_IMAGE" \
+            --image-id-file image/image-id.txt --evidence-dir image
       - name: Sign in to Azure with GitHub OIDC
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
