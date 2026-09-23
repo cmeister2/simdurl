@@ -1,0 +1,11 @@
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - curl
+  - ca-certificates
+runcmd:
+  - [systemctl, enable, --now, docker]
+  # No package manager work or scheduled OS upgrades during measurements.
+  - [systemctl, disable, --now, apt-daily.timer, apt-daily-upgrade.timer]
+  - [systemctl, stop, apt-daily.service, apt-daily-upgrade.service]

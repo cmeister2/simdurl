@@ -3,6 +3,9 @@
 [Bencher history](https://bencher.dev/perf/simdurl) records the public `simdurl`
 project. The [benchmark workflow](../.github/workflows/benchmarks.yml) builds on
 GitHub Actions and executes on Bencher's `intel-v1` hosted hardware.
+The [Azure VBMI2 lane](azure-benchmark-plan.md) adds automatic, disposable Azure
+VMs to the same per-commit workflow when configured. It publishes to a separate
+testbed and uses one source commit per allocation.
 
 ## CI configuration
 
@@ -12,8 +15,8 @@ maps that secret to the CLI's `BENCHER_API_KEY` environment variable only while
 uploading the image and submitting the run. A user API key is not needed in CI.
 
 Local `.env` and `.env.*` files are ignored by Git. The Docker build context
-uses an allowlist, and the final image contains only the benchmark executables,
-Python harness, runtime, and build metadata. Neither key is passed into the
+uses an allowlist, and the final image contains the benchmark executables,
+native backend tests, Python harness, runtime, and build metadata. Neither key is passed into the
 image. Registry credentials use a temporary Docker configuration.
 
 Pull requests run the exporter/range tests and a short container smoke check
@@ -23,8 +26,9 @@ not publish performance measurements. Publishing is restricted to `main`.
 The first run begins after this workflow reaches `main`. Each push enumerates
 all new **first-parent mainline commits**, including intermediate commits in a
 multi-commit push. Commits inside a merged feature branch are represented by the
-merge commit. Runs are queued without canceling earlier work; each workflow
-runs one benchmark job at a time. GitHub permits up to 100 pending workflows
+merge commit. Runs are queued without canceling earlier work; each testbed's
+matrix executes one commit at a time, with the two testbeds operating independently.
+GitHub permits up to 100 pending workflows
 with `queue: max`, and up to 256 commits in one matrix.
 
 A failed benchmark is a failed workflow, never a fabricated zero measurement.
@@ -81,7 +85,7 @@ select these ten in a saved plot to exclude inactive historical series.
 
 ## Measurement contract
 
-The image pins GCC 14.3.0 and Python 3.14.7 by image digest in
+The image pins GCC 15.2.0 and Python 3.14.7 by image digest in
 [`Dockerfile`](../benchmarks/bencher/Dockerfile). It compiles with
 `-std=c99 -O3 -DNDEBUG`, without `-march=native`. Function target attributes compile
 the accelerated kernels; runtime CPU checks select available backends.
@@ -107,7 +111,8 @@ The exporter rejects incomplete output, duplicate cases, nonpositive or
 nonfinite timing, failed subprocesses, and inconsistent repeated checksums.
 The selected case matrices must match the C filters.
 
-The hosted testbed is `intel-v1-gcc14-v1`. Use a new version when changing the
+The hosted testbed is `intel-v1-gcc15-v1`. The GCC 15 profile has a separate
+history from earlier GCC 14 measurements. Use a new version when changing the
 compiler, flags, measurement method, or workload semantics so incompatible
 measurements do not share a trend line. Keep case names stable when the workload
 is unchanged.
@@ -117,8 +122,8 @@ Each job captures CPU features and the library's available encode/decode/validat
 and helper backends for full SIMD blocks. Helper AVX2 dispatch starts at 64 bytes;
 shorter inputs can use SSE2 or portable tails.
 The initial hosted run exposed AVX2 encoding/validation and the portable
-decoder, without VBMI2. Tracking the VBMI2 path requires a different capable
-testbed. Hardware changes require a separate testbed or baseline.
+decoder, without VBMI2. The Azure lane requires native VBMI2 execution and uses
+`azure-d2s-v6-gcc15-v1`. Hardware changes require a separate testbed or baseline.
 
 ## Reading regressions and improvements
 

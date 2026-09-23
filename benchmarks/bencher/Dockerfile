@@ -4,6 +4,7 @@ WORKDIR /src
 COPY include/ include/
 COPY benchmarks/bench.c benchmarks/bench_validate.c benchmarks/bench_formscan.c benchmarks/bench_helpers.c benchmarks/bencher/backend_info.c ./
 COPY src/simdurl.c ./simdurl.c
+COPY tests/test_backends.c ./test_backends.c
 ARG SOURCE_SHA
 RUN mkdir /out && \
     for family in bench bench_validate bench_formscan bench_helpers; do \
@@ -20,6 +21,8 @@ RUN mkdir /out && \
     gcc -std=c99 -O3 -DNDEBUG -DSIMDURL_BENCH_COMPILED=1 -Iinclude \
       bench_helpers.c /tmp/simdurl.o -o /out/simdurl_bench_helpers_compiled && \
     gcc -std=c99 -O3 -DNDEBUG -DSIMDURL_HEADER_ONLY -Iinclude backend_info.c -o /out/backend_info && \
+    gcc -std=c99 -O3 -UNDEBUG -DSIMDURL_HEADER_ONLY -Iinclude test_backends.c -o /out/simdurl_test_backends && \
+    printf '%s\n' '-std=c99 -O3 -UNDEBUG -DSIMDURL_HEADER_ONLY; direct backend correctness checks enabled; no native tuning or LTO' > /out/test-compiler-flags && \
     printf '%s\n' "$SOURCE_SHA" > /out/source-sha && \
     printf '%s\n' '-std=c99 -O3 -DNDEBUG; header-only: -DSIMDURL_HEADER_ONLY; scalar: -DSIMDURL_DISABLE_SIMD=1; compiled formscan/helpers: separate simdurl.c object and -DSIMDURL_BENCH_COMPILED=1 benchmark; no native tuning or LTO' > /out/compiler-flags
 
