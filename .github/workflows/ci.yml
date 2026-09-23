@@ -101,6 +101,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Check release tooling
         run: npm run test:release
+      - name: Check AppVeyor alert lifecycle
+        run: node --test scripts/test-appveyor-alert.mjs
       - name: Build and prepare source archive without publishing
         run: npm run release:prepare -- 0.0.0
       - name: Build and test the unpacked archive
