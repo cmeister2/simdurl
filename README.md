@@ -196,17 +196,22 @@ requirement on a capable runner. `SIMDURL_BUILD_FUZZERS=ON` adds opt-in Clang
 libFuzzer targets and corpus replay tests.
 
 CTest exercises the compiled library, header-only and forced-portable variants,
-C++ translation units, exhaustive byte/hex cases, randomized reference checks,
+C++ translation units (including a C caller linked to a C++ implementation),
+exhaustive byte/hex cases, randomized reference checks,
 unaligned and in-place buffers, bounds checks, and protected-page boundaries on
 Unix and Windows. Scanner tests cover all 256 bytes and all eight check
 combinations, every vector lane, direct backend calls, exact allocations, and
 read-only guarded pages on Unix and Windows. Tests also install to a temporary
 prefix, relocate that prefix, and build separate consumers of both CMake targets.
+Form literal-scanning tests check linear search work to catch repeated suffix
+scans without relying on timing thresholds.
 
 CI covers Linux GCC/Clang, macOS ARM64, and Windows MSVC, MSYS2, and Cygwin,
 including native 32-bit Windows builds. It checks static/shared libraries,
-installed CMake consumers, native tuning, IPO, and sanitizers. ARM, MSVC, and
-32-bit builds use the portable fallback. Performance depends on CPU, input
+installed CMake consumers, native tuning, IPO, and sanitizers. A dedicated
+Intel SDE job requires the VBMI2 encoder and decoder to execute. Setting
+`-DSIMDURL_TEST_REQUIRE_BACKEND=vbmi2` makes backend tests fail when VBMI2 is unavailable.
+ARM, MSVC, and 32-bit builds use the portable fallback. Performance depends on CPU, input
 length, escape density, and compiler settings; measure on your deployment
 workload.
 
@@ -239,6 +244,21 @@ reports five samples in nanoseconds per call; early exits do not process the
 whole buffer. An optional argument sets iterations per sample (default 100000).
 The `_scalar` target disables explicit SIMD, while compiler vectorization remains
 permitted. Measurements use header-only calls with constant check flags.
+
+Form literal scanning has a separate benchmark for repeated short and long
+literal runs separated by `+` or percent escapes, mixed input, and plain literals:
+
+```sh
+./build/benchmarks/simdurl_bench_formscan
+./build/benchmarks/simdurl_bench_formscan_portable
+./build/benchmarks/simdurl_bench_formscan_compiled
+```
+
+These compare automatic header-only dispatch, portable C/libc, and compiled
+library calls. URI controls use the same inputs. CSV output reports five samples
+in CPU nanoseconds per call for 16 through 16384 input bytes. The optional argument
+sets iterations at 64 bytes (default 20000); longer cases use fewer iterations.
+Portable builds still permit compiler-generated SIMD and optimized libc routines.
 
 The [historical benchmarking guide](docs/benchmarking.md) describes the Bencher
 workflow, per-commit results, manual backfills, and local verification.

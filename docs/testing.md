@@ -19,9 +19,10 @@ Callers must supply valid spans and obey the overlap preconditions in
 | Bounded writes on success and errors | Capacity canaries, exact allocations, protected output boundaries |
 | Input remains unchanged for separate-buffer operations | Input snapshots and read-only mappings |
 | Exact in-place decoding preserves unread bytes | Memory tests, direct decoder tests, semantic reference comparisons |
+| Literal decoding is bounded and form scanning stays linear as input grows | `test_literals.c`: byte and marker boundaries, capacity/guard checks, counted searches |
 | Every error has `written == 0` | Contract, memory, semantic, and fuzz tests |
 | Portable and CPU-specific implementations agree with independent references | `test_backends.c`, direct scanner tests, fuzz targets |
-| C/C++ and packaging modes | Compiled/header-only/portable suites, full C++ codec suite, single implementation TU with separate consumers, relocated install tests |
+| C/C++ and packaging modes | Compiled/header-only/portable suites, full C++ codec suite, single implementation TU with separate consumers, C caller linked to a C++ implementation TU, relocated install tests |
 
 The oracle compares only the first `written` bytes on success. It never requires
 an unchanged output buffer on errors. SIMD may change bytes after `written`
@@ -76,6 +77,15 @@ fails the test. No requirement bypasses CPU feature checks. Runtime-dispatched
 public calls are tested separately by the main suites. Run a baseline binary on
 an older x86-64 CPU to validate the public fallback on that hardware; compiling
 with SIMD disabled is additional coverage, not equivalent dispatch evidence.
+
+CI also runs the direct backend suite under Intel Software Development Emulator
+(SDE), using its Ice Lake model (`-icx`) and `--require=vbmi2`. This provides
+VBMI2 encoder and decoder execution even when the host CPU lacks those
+instructions. The job uses a pinned archive and verifies its SHA-256 checksum
+on downloads and cache hits. Its execution log is retained alongside the
+native backend records. Emulation validates instruction semantics and dispatch
+under the emulated CPU features; it does not establish native performance or
+replace testing on hardware with those features.
 
 For optimized address/undefined-behavior checking:
 
@@ -135,8 +145,12 @@ They assume valid C objects and representable pointer operations.
 - Scanner loads are guarded by their 16/32-byte block lengths, and tails are
   bounded. The no-checks public path validates arguments before returning
   without reading input. SIMD loads use unaligned operations or `memcpy`.
-- Literal scans/copies use bounded lengths. Byte classification uses unsigned
-  byte values, and no mutable dispatch table or per-call shared state is needed.
+- Literal scans/copies use bounded lengths. Form decoding caches the next
+  percent marker (or span end) while consuming the same span in order, so
+  successive literal runs do not search the same suffix again. The cache
+  starts at the span beginning and points only into that span or one past its
+  end. Byte classification uses unsigned byte values, and no mutable dispatch
+  table or per-call shared state is needed.
 
 ## Release evidence
 
@@ -150,11 +164,13 @@ Direct kernel tests cover those kernels but cannot demonstrate dispatch on a
 CPU lacking the features. Keep these exclusions attached to the report and
 obtain the complementary run on the appropriate CPU; do not suppress the
 branches merely to improve the percentage.
-Hosted CI tests each backend supported by its runner, including VBMI2 when
-available, and retains execution records. CPU availability can vary between
-runs, so check those records before claiming validation of a backend for a
-release. A skipped backend needs a run on a CPU that supports it to establish
-coverage; historical logs from a different revision are not sufficient.
+Native hosted jobs test each backend supported by their runner and retain
+execution records. CPU availability can vary between runs, so inspect those
+records before claiming native backend validation for a release. The separate
+SDE job requires VBMI2 execution on every run and fails if it is unavailable;
+its record establishes emulated coverage. A skipped native backend still needs
+a run on hardware that supports it to establish native coverage. Historical
+logs from a different revision are not sufficient.
 
 PR jobs run deterministic tests, sanitizer checks, and corpus replay plus
 10-second fuzz campaigns per operation/mode. The Monday 03:23 UTC schedule runs
