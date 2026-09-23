@@ -37,7 +37,7 @@ resource publicIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   }
 }
 
-resource nic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
+resource nic 'Microsoft.Network/networkInterfaces@2024-10-01' = {
   name: '${runId}-nic'
   location: location
   tags: tags
