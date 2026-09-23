@@ -27,7 +27,7 @@ concurrency:
 jobs:
   tooling:
     name: Benchmark tooling
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -50,7 +50,7 @@ jobs:
   commits:
     needs: tooling
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.commits.outputs.matrix }}
@@ -73,7 +73,7 @@ jobs:
   benchmark:
     needs: commits
     if: needs.commits.outputs.count != '0'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: Benchmarking
     timeout-minutes: 30
     strategy:
@@ -132,7 +132,7 @@ jobs:
         run: rm -rf "$DOCKER_CONFIG"
       - name: Retain the report and raw measurement evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmarks-${{ matrix.commit }}-${{ github.run_attempt }}
           path: evidence/

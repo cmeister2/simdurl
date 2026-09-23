@@ -92,7 +92,7 @@ jobs:
         run: ctest --test-dir build -C Release --verbose --output-on-failure
       - name: Retain test and backend execution reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tests-${{ matrix.name }}
           path: build/Testing/Temporary/LastTest.log
@@ -127,7 +127,7 @@ jobs:
       - run: ctest --test-dir build --verbose --output-on-failure -E install_consumer
       - name: Retain sanitizer and backend execution reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sanitizers-${{ matrix.build_type }}
           path: build/Testing/Temporary/LastTest.log
@@ -135,7 +135,7 @@ jobs:
 
   memory-sanitizer:
     name: MemorySanitizer (instrumented C tests)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       CC: clang
@@ -159,7 +159,7 @@ jobs:
       - run: ctest --test-dir build --verbose --output-on-failure --no-tests=error -L '^c$'
       - name: Retain MemorySanitizer reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: memory-sanitizer
           path: build/Testing/Temporary/LastTest.log
@@ -167,7 +167,7 @@ jobs:
 
   fuzz:
     name: Differential fuzzing (${{ matrix.mode }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -205,7 +205,7 @@ jobs:
           done
       - name: Retain evolved corpora, failure inputs and logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fuzz-${{ matrix.mode }}
           path: |
@@ -217,7 +217,7 @@ jobs:
 
   coverage:
     name: Implementation coverage
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
       CC: clang-18
@@ -259,7 +259,7 @@ jobs:
             "${sources[@]}" > build/coverage/coverage.json
       - name: Retain coverage and execution reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: implementation-coverage
           path: |
@@ -269,7 +269,7 @@ jobs:
 
   vbmi2:
     name: AVX-512 VBMI2 emulation
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -293,7 +293,7 @@ jobs:
             ./build/tests/simdurl_test_backends --require=vbmi2 2>&1 | tee build/vbmi2-execution.log
       - name: Retain emulated backend execution reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vbmi2-emulation
           path: build/vbmi2-execution.log
