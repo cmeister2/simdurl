@@ -14,9 +14,9 @@ comparison happens in Bencher under the source SHA and the separate
 `azure-d2s-v6-gcc15-v1` testbed. There is no new manually dispatched
 workflow or paired-revision runner.
 
-Status: live qualification of the current GCC 15.2.0 core profile is pending.
-The earlier GCC 14 full-suite run, evidence validation, resource deletion,
-Bencher publication, and independent running-VM recovery drill passed. Monthly cost
+Status: live qualification of the current GCC 15.2.0 core profile passed,
+including native VBMI2 checks, evidence validation, resource deletion, and
+Bencher publication. An independent running-VM recovery drill also passed. Monthly cost
 controls and alerts are deployed and verified; the GitHub enable variable is
 `true`. The workflow changes must reach `main` before automatic Azure runs start.
 The agreed operating budget is **USD 100 per calendar month for
@@ -24,6 +24,19 @@ all Azure benchmarking resources**. The subscription bills in GBP, so its Azure
 budget is set to **GBP 60 per month**, with new allocations stopped at **GBP 48**
 of reported spending. The remaining GBP 12 allows for delayed charges and
 persistent resources.
+
+The GCC 15.2.0 core qualification on 2026-09-23 used a D2s_v6 with an
+`INTEL(R) XEON(R) PLATINUM 8573C`. All ten metrics completed at normal iteration
+counts between 21:58:18 and 21:58:20 UTC, with five samples each. Encode and
+decode selected VBMI2, and native correctness tests confirmed execution of both
+kernels. Evidence validation passed, the boot ID remained unchanged, and all
+four transient resources were deleted before publication. A separate Azure
+inventory query confirmed only the fixed network and NSG remained in the compute
+group. All ten published values were read back and verified in
+[Bencher report 01a0d048-3b7a-7da2-a5e3-0b3452fb94de](https://api.bencher.dev/v0/projects/simdurl/reports/01a0d048-3b7a-7da2-a5e3-0b3452fb94de),
+with no alerts, for source commit `c7510f5fdb65766c2f8b7ed95bedbcb6076f8e2d`
+under `azure-d2s-v6-gcc15-v1`. The controller and guest came from harness commit
+`8cee25be4f4834caeba8dc20a775ad57ada52a80`.
 
 The earlier GCC 14.3.0 qualification on 2026-09-23 confirmed the Bicep control
 deployment and a healthy independent reaper. A D2s_v6 guest reported
@@ -47,8 +60,10 @@ all four resources absent by 21:20:19. No controller cleanup or fallback was
 used, and the reaper reported no errors. Failed provisioning and guest-setup
 failures also completed normal controller cleanup.
 
-The initial controller, guest, exporter, and lifecycle checks passed 127 unit
-tests; workflow lint and Bicep compilation also passed. Local qualification used the
+The controller, guest, exporter, and lifecycle checks passed 132 unit
+tests; workflow lint and Bicep compilation also passed. Local GCC 15 container
+checks passed the ten-metric core profile at normal iteration counts and a
+1,356-metric full-suite smoke test. Local qualification used the
 operator identity. The first automatic GitHub OIDC, artifact transfer, and
 publication execution remains to be verified after the workflow is merged.
 

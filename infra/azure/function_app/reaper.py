@@ -82,4 +82,3 @@ def sweep(arm, manifest, previous, now):
         if state["empty_sweeps"] >= 2 and now >= parse_time(manifest["expires_at"]) + timedelta(hours=1):
             state["status"] = "cleaned"
     return state
-
