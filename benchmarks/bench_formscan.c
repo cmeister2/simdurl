@@ -10,6 +10,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "bench_sampling.h"
+
 #if defined(_MSC_VER)
 #include <intrin.h>
 #define BENCH_NOINLINE __declspec(noinline)
@@ -92,8 +94,45 @@ static size_t reference_decode(const char *input, size_t length, char *output,
   return written;
 }
 
+struct formscan_batch {
+  const char *input, *expected;
+  char *output;
+  decode_function decode;
+  size_t length, expected_length;
+};
+
+static int measure_batch(void *opaque, size_t iterations, uint64_t *elapsed_ns)
+{
+  struct formscan_batch *context = opaque;
+  const char *input = context->input;
+  char *output = context->output;
+  decode_function decode = context->decode;
+  size_t length = context->length, expected_length = context->expected_length;
+  size_t i;
+  uint64_t sum = 0;
+  clock_t start = clock(), end;
+  for(i = 0; i < iterations; ++i) {
+    simdurl_result result;
+    BENCH_BARRIER(input);
+    result = decode(input, length, output);
+    BENCH_BARRIER(output);
+    if(result.status != SIMDURL_OK || result.written != expected_length)
+      return 1;
+    sum += result.written + (unsigned char)output[0] +
+           (unsigned char)output[expected_length - 1];
+  }
+  end = clock();
+  checksum += sum;
+  if(bench_elapsed_ns(start, end, elapsed_ns) ||
+     memcmp(output, context->expected, expected_length) ||
+     (unsigned char)output[-1] != 0xa5 ||
+     (unsigned char)output[length] != 0xa5)
+    return 1;
+  return 0;
+}
+
 static int run_case(size_t length, enum pattern pattern, unsigned int form,
-                    size_t base_iterations)
+                    size_t base_iterations, int calibrated)
 {
   static const char *const names[] = {
     "literal", "plus_short", "plus_long", "percent_short", "percent_long", "mixed"
@@ -105,6 +144,7 @@ static int run_case(size_t length, enum pattern pattern, unsigned int form,
   size_t expected_length, i, iterations = base_iterations / ((length + 63) / 64);
   unsigned int sample;
   simdurl_result result;
+  struct formscan_batch context;
   if(!iterations)
     iterations = 1;
   fill_input(input, length, pattern);
@@ -114,6 +154,18 @@ static int run_case(size_t length, enum pattern pattern, unsigned int form,
   if(result.status != SIMDURL_OK || result.written != expected_length ||
      memcmp(output, expected, expected_length))
     return 1;
+  context.input = input;
+  context.expected = expected;
+  context.output = output;
+  context.decode = decode;
+  context.length = length;
+  context.expected_length = expected_length;
+  if(calibrated) {
+    char name[128];
+    snprintf(name, sizeof(name), "formscan/%s/%s/%lu/simdurl/automatic",
+             form ? "form" : "URI", names[pattern], (unsigned long)length);
+    return bench_sample_case(name, iterations, measure_batch, &context);
+  }
   for(i = 0; i < 8; ++i) {
     BENCH_BARRIER(input);
     result = decode(input, length, output);
@@ -121,27 +173,11 @@ static int run_case(size_t length, enum pattern pattern, unsigned int form,
     checksum += result.written;
   }
   for(sample = 0; sample < SAMPLES; ++sample) {
-    uint64_t sum = 0;
-    clock_t start = clock(), end;
+    uint64_t elapsed_ns;
     double ns;
-    for(i = 0; i < iterations; ++i) {
-      BENCH_BARRIER(input);
-      result = decode(input, length, output);
-      BENCH_BARRIER(output);
-      if(result.status != SIMDURL_OK || result.written != expected_length)
-        return 1;
-      sum += result.written + (unsigned char)output[0] +
-             (unsigned char)output[expected_length - 1];
-    }
-    end = clock();
-    checksum += sum;
-    if(start == (clock_t)-1 || end == (clock_t)-1 || end < start ||
-       memcmp(output, expected, expected_length) ||
-       (unsigned char)output[-1] != 0xa5 ||
-       (unsigned char)output[length] != 0xa5)
+    if(measure_batch(&context, iterations, &elapsed_ns))
       return 1;
-    ns = (double)(end - start) * 1e9 / (double)CLOCKS_PER_SEC /
-         (double)iterations;
+    ns = (double)elapsed_ns / (double)iterations;
     printf("%s,%s,%lu,%lu,%u,%.3f,%.6f\n",
            form ? "form" : "URI", names[pattern], (unsigned long)length,
            (unsigned long)iterations, sample + 1, ns, ns / (double)length);
@@ -155,8 +191,9 @@ int main(int argc, char **argv)
   size_t iterations = 20000, index;
   unsigned int form, pattern;
   int core = argc == 3;
-  if(argc > 3 || (core && strcmp(argv[2], "--core"))) {
-    fprintf(stderr, "Usage: %s [iterations_at_64_bytes] [--core]\n", argv[0]);
+  int calibrated = core && !strcmp(argv[2], "--calibrated");
+  if(argc > 3 || (core && !calibrated && strcmp(argv[2], "--core"))) {
+    fprintf(stderr, "Usage: %s [iterations_at_64_bytes] [--core|--calibrated]\n", argv[0]);
     return 1;
   }
   if(argc >= 2) {
@@ -171,18 +208,28 @@ int main(int argc, char **argv)
     }
     iterations = (size_t)parsed;
   }
-#ifdef SIMDURL_BENCH_COMPILED
-  puts("# compiled library; configured backend selection applies");
-#elif defined(SIMDURL_DISABLE_SIMD)
-  puts("# portable C/libc; compiler-generated and libc SIMD remain enabled");
-#else
-  puts("# automatic CPU selection (header-only)");
+#if defined(SIMDURL_BENCH_COMPILED) || defined(SIMDURL_DISABLE_SIMD)
+  if(calibrated) {
+    fputs("Calibrated sampling requires the automatic backend binary\n", stderr);
+    return 1;
+  }
 #endif
-  puts("# fixed mode/noinline wrappers; disjoint buffers; CPU ns/operation");
-  puts("# long runs contain 256 literal bytes; short runs contain one");
-  puts("# iterations decrease with input length; five samples after warmup");
-  puts("# input/output barriers, status checks and output sampling are included");
-  puts("mode,pattern,bytes,iterations,sample,ns_per_op,ns_per_byte");
+  if(calibrated)
+    bench_sampling_header();
+  else {
+#ifdef SIMDURL_BENCH_COMPILED
+    puts("# compiled library; configured backend selection applies");
+#elif defined(SIMDURL_DISABLE_SIMD)
+    puts("# portable C/libc; compiler-generated and libc SIMD remain enabled");
+#else
+    puts("# automatic CPU selection (header-only)");
+#endif
+    puts("# fixed mode/noinline wrappers; disjoint buffers; CPU ns/operation");
+    puts("# long runs contain 256 literal bytes; short runs contain one");
+    puts("# iterations decrease with input length; five samples after warmup");
+    puts("# input/output barriers, status checks and output sampling are included");
+    puts("mode,pattern,bytes,iterations,sample,ns_per_op,ns_per_byte");
+  }
   for(index = 0; index < sizeof(lengths) / sizeof(lengths[0]); ++index)
     for(pattern = LITERAL; pattern <= MIXED; ++pattern) {
       /* Long-marker cases shorter than a run would duplicate literal cases. */
@@ -192,7 +239,8 @@ int main(int argc, char **argv)
       for(form = 0; form < 2; ++form) {
         if(core && !(lengths[index] == 16384 && pattern == PLUS_LONG && form))
           continue;
-        if(run_case(lengths[index], (enum pattern)pattern, form, iterations)) {
+        if(run_case(lengths[index], (enum pattern)pattern, form, iterations,
+                    calibrated)) {
           fputs("Benchmark validation or timer failed\n", stderr);
           return 1;
         }

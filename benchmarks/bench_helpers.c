@@ -10,6 +10,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "bench_sampling.h"
+
 #if defined(_MSC_VER)
 #include <intrin.h>
 #define BENCH_NOINLINE __declspec(noinline)
@@ -179,7 +181,7 @@ static int validate_outputs(input_buffers input, output_buffers output,
 
 static BENCH_NOINLINE double measure(helper_function function,
   input_buffers input, output_buffers output, size_t length,
-  enum operation operation, size_t iterations)
+  enum operation operation, size_t iterations, uint64_t *elapsed_ns)
 {
   uint64_t sum = 0;
   size_t i;
@@ -200,15 +202,46 @@ static BENCH_NOINLINE double measure(helper_function function,
   }
   end = clock();
   checksum += sum;
-  if(start == (clock_t)-1 || end == (clock_t)-1 || end < start)
+  if(bench_elapsed_ns(start, end, elapsed_ns))
     return -1.0;
-  return (double)(end - start) * 1e9 / (double)CLOCKS_PER_SEC /
-         (double)iterations;
+  return (double)*elapsed_ns / (double)iterations;
+}
+
+struct helper_batch {
+  helper_function function;
+  char (*input)[MAX_LENGTH + INPUT_COUNT + 2];
+  char (*output)[2 * MAX_LENGTH + INPUT_COUNT + 2];
+  size_t length;
+  enum operation operation;
+};
+
+static int measure_batch(void *opaque, size_t iterations, uint64_t *elapsed_ns)
+{
+  struct helper_batch *context = opaque;
+  size_t row, written = context->operation >= HEX_LOWER ?
+                         2 * context->length : context->length;
+  prepare_outputs(context->input, context->output, context->length,
+                  context->operation);
+  /* Initialize all rows outside timing, including tiny calibration seeds. */
+  for(row = 0; row < INPUT_COUNT; ++row) {
+    char *destination = context->output[row] + row + 1;
+    simdurl_result result = context->function(
+      context->operation == ASCII_INPLACE ? destination :
+        context->input[row] + row + 1, context->length, destination);
+    if(result.status != SIMDURL_OK || result.written != written)
+      return 1;
+  }
+  if(measure(context->function, context->input, context->output, context->length,
+             context->operation, iterations, elapsed_ns) < 0 ||
+     validate_outputs(context->input, context->output, context->length,
+                      context->operation))
+    return 1;
+  return 0;
 }
 
 static int run_case(size_t length, unsigned int pattern,
                     enum operation operation, const struct fixed_case *fixed,
-                    size_t iterations, int core)
+                    size_t iterations, int core, int calibrated)
 {
   static const char *const operations[] = {
     "ascii_copy", "ascii_inplace_already_lowered", "hex_lower", "hex_upper"
@@ -228,6 +261,7 @@ static int run_case(size_t length, unsigned int pattern,
     fixed->functions[operation == HEX_UPPER] : runtime_functions[operation];
   size_t row, written = operation >= HEX_LOWER ? 2 * length : length;
   unsigned int repeat, order, variant;
+  uint64_t elapsed_ns;
   fill_inputs(input, length, pattern, operation);
   for(variant = 0; variant < 2; ++variant) {
     prepare_outputs(input, output, length, operation);
@@ -240,9 +274,21 @@ static int run_case(size_t length, unsigned int pattern,
         return 1;
     }
     if(validate_outputs(input, output, length, operation) ||
-       ((!core || variant) &&
-        measure(functions[variant], input, output, length, operation, 1000) < 0))
+       (!calibrated && (!core || variant) &&
+        measure(functions[variant], input, output, length, operation, 1000,
+                &elapsed_ns) < 0))
       return 1;
+  }
+  if(calibrated) {
+    char name[160];
+    struct helper_batch context = {
+      functions[1], input, output, length, operation
+    };
+    snprintf(name, sizeof(name), "helpers/%s/%s/%lu/%s/simdurl/automatic",
+             operations[operation], operation >= HEX_LOWER ? "binary" :
+               patterns[pattern], (unsigned long)length,
+             fixed ? "fixed" : "runtime");
+    return bench_sample_case(name, iterations, measure_batch, &context);
   }
   for(repeat = 0; repeat < REPEATS; ++repeat) {
     for(order = 0; order < 2; ++order) {
@@ -258,7 +304,7 @@ static int run_case(size_t length, unsigned int pattern,
                              input[row] + row + 1, length, destination);
       }
       ns = measure(functions[variant], input, output, length, operation,
-                   iterations);
+                   iterations, &elapsed_ns);
       if(ns < 0 || validate_outputs(input, output, length, operation))
         return 1;
       printf("%s,%s,%lu,%s,%s,%u,%.3f\n", operations[operation],
@@ -278,8 +324,9 @@ int main(int argc, char **argv)
   size_t iterations = 100000, length_index;
   unsigned int pattern, operation;
   int core = argc == 3;
-  if(argc > 3 || (core && strcmp(argv[2], "--core"))) {
-    fprintf(stderr, "Usage: %s [iterations_per_sample] [--core]\n", argv[0]);
+  int calibrated = core && !strcmp(argv[2], "--calibrated");
+  if(argc > 3 || (core && !calibrated && strcmp(argv[2], "--core"))) {
+    fprintf(stderr, "Usage: %s [iterations_per_sample] [--core|--calibrated]\n", argv[0]);
     return 1;
   }
   if(argc >= 2) {
@@ -294,23 +341,33 @@ int main(int argc, char **argv)
     }
     iterations = (size_t)parsed;
   }
-#ifdef SIMDURL_BENCH_COMPILED
-  puts("# simdurl: compiled library; configured library CPU selection applies");
-#elif defined(SIMDURL_DISABLE_SIMD)
-  puts("# simdurl: portable C header-only; compiler-generated SIMD permitted");
-#else
-  puts("# simdurl: automatic CPU selection (header-only)");
+#if defined(SIMDURL_BENCH_COMPILED) || defined(SIMDURL_DISABLE_SIMD)
+  if(calibrated) {
+    fputs("Calibrated sampling requires the automatic backend binary\n", stderr);
+    return 1;
+  }
 #endif
-  puts("# comparators: independent portable C; optimization and vectorization enabled");
-  puts("# comparators assume valid arguments; simdurl includes API argument checks");
-  puts("# both variants use noinline wrappers; compiled simdurl retains a separate API boundary");
-  puts("# fixed hex wrappers expose constant lengths and case to both variants");
-  puts("# inplace inputs are already lowercased before timing; no input-reset cost included");
-  puts("# checksums, output sampling and call overhead are included in both timings");
-  printf("# %lu iterations/sample; %u %ssamples; CPU time; ns/operation\n",
-         (unsigned long)iterations, (unsigned int)REPEATS,
-         core ? "" : "alternating ");
-  puts("operation,pattern,bytes,length_kind,variant,sample,ns_per_op");
+  if(calibrated)
+    bench_sampling_header();
+  else {
+#ifdef SIMDURL_BENCH_COMPILED
+    puts("# simdurl: compiled library; configured library CPU selection applies");
+#elif defined(SIMDURL_DISABLE_SIMD)
+    puts("# simdurl: portable C header-only; compiler-generated SIMD permitted");
+#else
+    puts("# simdurl: automatic CPU selection (header-only)");
+#endif
+    puts("# comparators: independent portable C; optimization and vectorization enabled");
+    puts("# comparators assume valid arguments; simdurl includes API argument checks");
+    puts("# both variants use noinline wrappers; compiled simdurl retains a separate API boundary");
+    puts("# fixed hex wrappers expose constant lengths and case to both variants");
+    puts("# inplace inputs are already lowercased before timing; no input-reset cost included");
+    puts("# checksums, output sampling and call overhead are included in both timings");
+    printf("# %lu iterations/sample; %u %ssamples; CPU time; ns/operation\n",
+           (unsigned long)iterations, (unsigned int)REPEATS,
+           core ? "" : "alternating ");
+    puts("operation,pattern,bytes,length_kind,variant,sample,ns_per_op");
+  }
   for(length_index = 0; length_index < sizeof(lengths) / sizeof(lengths[0]);
       ++length_index)
     for(operation = ASCII_COPY; operation <= HEX_UPPER; ++operation)
@@ -322,7 +379,7 @@ int main(int argc, char **argv)
            (operation == HEX_LOWER && lengths[length_index] == 4096)))
           continue;
         if(run_case(lengths[length_index], pattern, (enum operation)operation,
-                    NULL, iterations, core))
+                    NULL, iterations, core, calibrated))
           goto failure;
       }
   for(length_index = 0;
@@ -331,7 +388,7 @@ int main(int argc, char **argv)
       if(core && !(operation == HEX_LOWER && fixed_cases[length_index].length == 32))
         continue;
       if(run_case(fixed_cases[length_index].length, 0, (enum operation)operation,
-                  &fixed_cases[length_index], iterations, core))
+                  &fixed_cases[length_index], iterations, core, calibrated))
         goto failure;
     }
   printf("# checksum: %" PRIu64 "\n", checksum);

@@ -2,7 +2,7 @@
 FROM gcc:15.2.0-bookworm@sha256:9ca91b05c7b07d2979f16413e8b2cd6ec8a7c80ffca4121ccab0aeba33f90460 AS build
 WORKDIR /src
 COPY include/ include/
-COPY benchmarks/bench.c benchmarks/bench_validate.c benchmarks/bench_formscan.c benchmarks/bench_helpers.c benchmarks/bencher/backend_info.c ./
+COPY benchmarks/bench.c benchmarks/bench_validate.c benchmarks/bench_formscan.c benchmarks/bench_helpers.c benchmarks/bench_sampling.h benchmarks/bencher/backend_info.c ./
 COPY src/simdurl.c ./simdurl.c
 COPY tests/test_backends.c ./test_backends.c
 ARG SOURCE_SHA

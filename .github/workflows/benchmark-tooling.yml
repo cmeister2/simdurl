@@ -40,7 +40,7 @@ jobs:
             --archive "$RUNNER_TEMP/benchmark-image.tar" --image simdurl-bencher:smoke
           # Check both the ten-case dashboard and the opt-in diagnostic suite.
           for suite in core full; do
-            docker run --rm --network none simdurl-bencher:smoke --suite "$suite" \
+            docker run --rm --network none simdurl-bencher:smoke --suite "$suite" --sampling fixed \
               --codec-repeats 1 --codec-iterations 10000 --validation-iterations 10000 \
               --formscan-iterations 20000 --helper-iterations 10000 \
               > "$RUNNER_TEMP/benchmark-$suite.json" 2> "$RUNNER_TEMP/benchmark-$suite.log" || {
@@ -52,3 +52,21 @@ jobs:
             jq -e --argjson expected "$expected" 'length == $expected' \
               "$RUNNER_TEMP/benchmark-$suite.json" > /dev/null
           done
+      - name: Check calibrated core sampling without credentials
+        run: |
+          docker run --rm --network none simdurl-bencher:smoke --suite core \
+            > "$RUNNER_TEMP/benchmark-calibrated.json" 2> "$RUNNER_TEMP/benchmark-calibrated.log" || {
+              cat "$RUNNER_TEMP/benchmark-calibrated.log" >&2
+              exit 1
+            }
+          jq -e 'length == 10' "$RUNNER_TEMP/benchmark-calibrated.json" > /dev/null
+      - name: Retain benchmark tooling evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-tooling-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/benchmark-*.json
+            ${{ runner.temp }}/benchmark-*.log
+          if-no-files-found: ignore
+          retention-days: 7

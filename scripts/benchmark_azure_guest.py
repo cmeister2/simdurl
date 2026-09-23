@@ -303,10 +303,13 @@ def benchmark_command(image_id, cpu, name, smoke):
     ]
     if smoke:
         command.extend([
+            "--sampling", "fixed",
             "--codec-repeats", "1", "--codec-iterations", "10000",
             "--validation-iterations", "10000", "--formscan-iterations", "20000",
             "--helper-iterations", "10000",
         ])
+    else:
+        command.extend(["--sampling", "calibrated"])
     return command
 
 

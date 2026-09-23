@@ -32,8 +32,10 @@ action logs out during its cleanup. The builder action removes its builder after
 the build action has finished exporting its records.
 
 Pull requests run the separate [Benchmark checks workflow](../.github/workflows/benchmark-tooling.yml)
-with exporter/range tests and a short container smoke check, without credentials
-or network access inside the container. The main benchmark workflow calls that
+with exporter/range tests, short fixed-sampling container smoke checks, and one
+default calibrated core run, without credentials or network access inside the
+container. These checks retain their raw evidence as a seven-day artifact and
+do not publish performance results. The main benchmark workflow calls that
 same validation workflow before selecting commits and publishing measurements.
 This keeps execution and cleanup jobs out of PR checks while preserving the
 validation gate on `main`. Publishing is restricted to `main`.
@@ -105,32 +107,38 @@ The image pins GCC 15.2.0 and Python 3.14.7 by image digest in
 `-std=c99 -O3 -DNDEBUG`, without `-march=native`. Function target attributes compile
 the accelerated kernels; runtime CPU checks select available backends.
 
-Every core case has five samples by default. Bencher stores median **CPU-time
-nanoseconds per operation**, with observed minimum and maximum as bounds; these
-bounds are not confidence intervals. Codec elapsed time is converted to latency,
-so byte throughput is never mislabeled as operations/sec. Lower latency is better.
+Every core case uses calibrated sampling by default: at least **100 ms of
+discarded warmup**, then **20 accepted timing samples**. Calibration chooses
+iterations separately for each case to target **100 ms of CPU time per sample**;
+samples shorter than **50 ms** are discarded and the iteration count increased.
+Warmup and calibration measurements do not contribute to the published score.
+Bencher stores median **CPU-time nanoseconds per operation**, with observed
+minimum and maximum as bounds; these bounds are not confidence intervals. Each
+of the ten cases has its own median, rather than a combined score. Lower latency
+is better.
 
-Codec and validation use 100,000 iterations per sample. Form scanning uses
-`max(1, 100000 // ceil(length / 64))`, or 390 iterations for its 16 KiB core case.
-Helpers use 500,000 iterations per sample. Timings include the existing wrapper,
-status checks, barriers, and checksum sampling. Helper and validation comparators
-still check correctness outside timing in core mode.
+The minimum sample duration avoids basing a result on a few hundred microseconds
+of work. Timings retain the existing wrapper, status checks, barriers, and
+checksum sampling. Helper and validation comparators still check correctness
+outside timing in core mode.
 
-Harness metadata version 4 records the selected suite and published benchmark
-count. Case inputs, iteration defaults, timing loops, and metric names are
-unchanged, but reducing surrounding work can affect machine state. For a precise
-before/after claim, rerun both revisions with the same core harness rather than
-attributing a change across the harness transition entirely to the library.
+Harness metadata version 5 records the sampling policy, selected suite, and
+published benchmark count. Evidence retains each batch's actual iteration count
+and CPU duration, including discarded warmup and calibration batches, alongside
+the 20 accepted latency samples. Workloads, timer, compiler flags, and metric
+names are unchanged; the sampling policy identifies the change within the
+existing testbed history.
 
 The exporter rejects incomplete output, duplicate cases, nonpositive or
 nonfinite timing, failed subprocesses, and inconsistent repeated checksums.
 The selected case matrices must match the C filters.
 
-The hosted testbed is `intel-v1-gcc15-v1`. The GCC 15 profile has a separate
-history from earlier GCC 14 measurements. Use a new version when changing the
-compiler, flags, measurement method, or workload semantics so incompatible
-measurements do not share a trend line. Keep case names stable when the workload
-is unchanged.
+The hosted testbed remains `intel-v1-gcc15-v1`, retaining the earlier five-sample
+results alongside calibrated measurements. Harness metadata records the sampling
+policy for each run. GCC 14 measurements retain their separate history. Use a
+new version when changing the compiler, flags, or workload semantics so
+incompatible measurements do not share a trend line. Keep case names stable when
+the workload is unchanged.
 
 Bencher's published `intel-v1` specification does not guarantee VBMI2.
 Each job captures CPU features and the library's available encode/decode/validate
@@ -138,7 +146,8 @@ and helper backends for full SIMD blocks. Helper AVX2 dispatch starts at 64 byte
 shorter inputs can use SSE2 or portable tails.
 The initial hosted run exposed AVX2 encoding/validation and the portable
 decoder, without VBMI2. The Azure lane requires native VBMI2 execution and uses
-`azure-d2s-v6-gcc15-v1`. Hardware changes require a separate testbed or baseline.
+the existing `azure-d2s-v6-gcc15-v1` testbed. Hardware changes require a separate
+testbed or baseline.
 
 ## Reading regressions and improvements
 
@@ -147,6 +156,14 @@ ten timings into one score: a regression in decoding could be hidden by faster
 hex encoding. As an initial review policy, investigate repeatable slowdowns of
 20% or more; calibrate that threshold after observing normal run-to-run variation.
 This is a suggested review threshold, not an enabled release gate.
+
+Longer samples and warmup reduce noise within one allocation; they do not remove
+differences in effective CPU frequency or contention between newly allocated
+VMs. Earlier Azure runs with identical benchmark binaries on the same CPU model
+moved together by roughly 10–20% across allocations. Review the next automatic
+calibrated reports before treating smaller changes as regressions. Repeating one
+unchanged commit across fresh allocations can characterize any remaining host
+variation; this is a separate qualification exercise, not part of every run.
 
 For a SIMD change, run the before and after revisions with the same harness,
 compiler, CPU, and iteration counts. Repeat the runs with alternating revision
@@ -181,6 +198,10 @@ reported as call latency because early rejection need not inspect the full input
 Use this suite for local investigations, not routine publication to the ten-case
 dashboard. Direct C executable invocations retain full coverage by default;
 `EXECUTABLE ITERATIONS --core` selects only that family's core cases.
+The full suite defaults to `--sampling fixed`, preserving the original five
+samples per case and fixed iteration counts. Codec and validation use 100,000
+iterations per sample, helpers use 500,000, and form scanning scales a base
+100,000 by `max(1, iterations // ceil(length / 64))`.
 
 ## Results and evidence
 
@@ -189,6 +210,7 @@ uploads 90-day GitHub artifacts containing the report, remote job output, image
 digest, and harness revision. The remote job's stderr contains a
 `simdurl_evidence` JSON document with compiler flags, backend selection, every
 raw executable output, individual timing samples, and machine metadata.
+Calibrated runs also retain warmup, calibration, and accepted batch evidence.
 Download these artifacts if you need your own longer-lived raw archive.
 
 The Bencher CLI can also download an individual report as JSON. To export its
@@ -226,10 +248,11 @@ python3 scripts/benchmark.py --bin-dir build-bencher/benchmarks \
 The output directory must be empty. The command emits Bencher Metric Format
 JSON on stdout and saves the same metrics, raw output, metadata, and samples in
 the directory. Add `--suite full` with a fresh output directory for diagnostics.
-Optional `--codec-iterations`, `--codec-repeats`,
+Use `--sampling fixed` with optional `--codec-iterations`, `--codec-repeats`,
 `--validation-iterations`, `--formscan-iterations`, and `--helper-iterations`
-arguments support smoke checks. Very small iteration counts may round to zero
-and are rejected.
+arguments for short smoke checks. Fixed sampling is for functionality checks
+and diagnostics; do not publish these reduced runs as performance measurements.
+Very small iteration counts may round to zero and are rejected.
 
 To exercise the exact container locally:
 
