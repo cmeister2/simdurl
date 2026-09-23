@@ -39,8 +39,20 @@ jobs:
           python3 -m unittest discover -s infra/azure -p 'test_*.py'
       - name: Smoke-test the benchmark image without credentials
         run: |
-          docker build --platform linux/amd64 --file benchmarks/bencher/Dockerfile \
+          docker build --platform linux/amd64 --provenance=false --file benchmarks/bencher/Dockerfile \
             --build-arg "SOURCE_SHA=$GITHUB_SHA" --tag simdurl-bencher:smoke .
+          # Exercise the hosted Docker store's export format before Azure allocation.
+          docker save --output "$RUNNER_TEMP/benchmark-image.tar" simdurl-bencher:smoke
+          PYTHONPATH=scripts python3 - "$RUNNER_TEMP/benchmark-image.tar" <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+          from benchmark_azure_guest import archive_image
+          image_id = subprocess.check_output([
+              "docker", "image", "inspect", "--format", "{{.Id}}", "simdurl-bencher:smoke",
+          ], text=True).strip()
+          archive_image(Path(sys.argv[1]), image_id)
+          PY
           # Check both the ten-case dashboard and the opt-in diagnostic suite.
           for suite in core full; do
             docker run --rm --network none simdurl-bencher:smoke --suite "$suite" \
@@ -178,13 +190,19 @@ jobs:
         run: |
           mkdir -p image "$RUNNER_TEMP/azure-benchmark-context"
           cp -R source/include source/src harness/benchmarks harness/scripts harness/tests "$RUNNER_TEMP/azure-benchmark-context/"
-          docker build --platform linux/amd64 \
+          # The archive contract is one executable image, without attestation manifests.
+          docker build --platform linux/amd64 --provenance=false \
             --file "$RUNNER_TEMP/azure-benchmark-context/benchmarks/bencher/Dockerfile" \
             --build-arg "SOURCE_SHA=$SOURCE_SHA" --tag "$AZURE_IMAGE" "$RUNNER_TEMP/azure-benchmark-context"
           docker save --output image/image.tar "$AZURE_IMAGE"
           sha256sum image/image.tar > image/image.tar.sha256
           docker image inspect --format '{{.Id}}' "$AZURE_IMAGE" > image/image-id.txt
           git -C harness rev-parse HEAD > image/harness-sha.txt
+          PYTHONPATH=harness/scripts python3 - <<'PY'
+          from pathlib import Path
+          from benchmark_azure_guest import archive_image
+          archive_image(Path("image/image.tar"), Path("image/image-id.txt").read_text().strip())
+          PY
       - name: Retain the image for Azure execution
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
