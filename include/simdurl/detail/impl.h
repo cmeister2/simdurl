@@ -44,6 +44,7 @@ simdurl_detail_decode_tail(const char *input, size_t remaining, char *output,
                           size_t capacity, unsigned int form,
                           unsigned char reject_limit, size_t written)
 {
+  const char *next_percent = input;
   while(remaining) {
     unsigned char c = (unsigned char)*input;
     size_t consumed = 1;
@@ -61,7 +62,8 @@ simdurl_detail_decode_tail(const char *input, size_t remaining, char *output,
       c = ' ';
     else {
       /* A libc scan/copy keeps the scalar fallback fast on literal runs. */
-      size_t count = simdurl_detail_literal_length(input, remaining, form);
+      size_t count = simdurl_detail_literal_length(input, remaining, form,
+                                                  &next_percent);
       if(count > capacity)
         return simdurl_detail_result(SIMDURL_BUFFER_TOO_SMALL, 0);
       if(!simdurl_detail_literals_allowed(input, count, reject_limit))

@@ -42,6 +42,14 @@ foreach(suite IN ITEMS contract memory)
     simdurl_test_${suite}_scalar PROPERTIES LABELS "core;${suite}")
 endforeach()
 
+simdurl_add_test(simdurl_test_literals simdurl::simdurl test_literals.c)
+simdurl_add_test(simdurl_test_literals_header_only simdurl::header_only test_literals.c)
+simdurl_add_test(simdurl_test_literals_scalar simdurl::header_only test_literals.c)
+target_compile_definitions(simdurl_test_literals_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
+simdurl_add_test(simdurl_test_literal_complexity simdurl::header_only test_literals.c)
+target_compile_definitions(simdurl_test_literal_complexity PRIVATE
+  SIMDURL_DISABLE_SIMD=1 SIMDURL_TEST_COUNT_SCANS=1)
+
 add_executable(simdurl_test_backends test_backends.c)
 target_link_libraries(simdurl_test_backends PRIVATE simdurl::header_only)
 set_target_properties(simdurl_test_backends PROPERTIES
@@ -99,6 +107,20 @@ endif()
 if(SIMDURL_NATIVE)
   target_compile_options(simdurl_test_cpp_implementation PRIVATE "${SIMDURL_NATIVE_FLAG}")
 endif()
+# Exercise C declarations against definitions compiled as C++.
+add_executable(simdurl_test_c_cpp_implementation c_implementation_caller.c)
+target_link_libraries(simdurl_test_c_cpp_implementation PRIVATE simdurl_test_cpp_implementation)
+target_include_directories(simdurl_test_c_cpp_implementation PRIVATE "${PROJECT_SOURCE_DIR}/include")
+set_target_properties(simdurl_test_c_cpp_implementation PROPERTIES
+  C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS NO LINKER_LANGUAGE CXX)
+if(MSVC)
+  target_compile_options(simdurl_test_c_cpp_implementation PRIVATE /W4)
+else()
+  target_compile_options(simdurl_test_c_cpp_implementation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME simdurl_test_c_cpp_implementation COMMAND simdurl_test_c_cpp_implementation)
+set_tests_properties(simdurl_test_c_cpp_implementation PROPERTIES TIMEOUT 180 LABELS "core;cpp")
+
 add_executable(simdurl_test_cpp_semantics_implementation test_simdurl_cpp.cpp
   $<TARGET_OBJECTS:simdurl_test_cpp_implementation>)
 target_include_directories(simdurl_test_cpp_semantics_implementation PRIVATE "${PROJECT_SOURCE_DIR}/include")
@@ -126,7 +148,7 @@ endforeach()
 
 if((WIN32 OR CYGWIN) AND BUILD_SHARED_LIBS)
   foreach(target IN ITEMS simdurl_test simdurl_test_scanner simdurl_test_contract
-      simdurl_test_memory simdurl_test_cpp_library simdurl_test_cpp_semantics_library)
+      simdurl_test_memory simdurl_test_literals simdurl_test_cpp_library simdurl_test_cpp_semantics_library)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:simdurl> $<TARGET_FILE_DIR:${target}>

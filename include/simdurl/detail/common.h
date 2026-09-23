@@ -68,19 +68,31 @@ SIMDURL_DETAIL_INLINE unsigned int simdurl_detail_hex(unsigned char c)
   return 256;
 }
 
-/* Locate bytes that require decoding, without interpreting any escapes. */
+/* Initialize *next_percent to the span start, then reuse it only while
+ * consuming successive literal runs from that span. Cache the next percent
+ * marker (or the span end) so each percent search covers new input. Plus
+ * searches stop at their first match; total search work is linear in the span.
+ */
 SIMDURL_DETAIL_INLINE size_t simdurl_detail_literal_length(
-  const char *input, size_t length, unsigned int form)
+  const char *input, size_t length, unsigned int form, const char **next_percent)
 {
-  const char *marker = (const char *)memchr(input, '%', length);
-  if(marker)
-    length = (size_t)(marker - input);
-  if(form) {
-    marker = (const char *)memchr(input, '+', length);
-    if(marker)
-      length = (size_t)(marker - input);
+  const char *marker;
+  if(!length)
+    return 0;
+  if(!form) {
+    marker = (const char *)memchr(input, '%', length);
+    return marker ? (size_t)(marker - input) : length;
   }
-  return length;
+  marker = *next_percent;
+  if(input >= marker) {
+    marker = (const char *)memchr(input, '%', length);
+    if(!marker)
+      marker = input + length;
+    *next_percent = marker;
+  }
+  length = (size_t)(marker - input);
+  marker = (const char *)memchr(input, '+', length);
+  return marker ? (size_t)(marker - input) : length;
 }
 
 /* A minimum reduction validates the entire literal span and allows the

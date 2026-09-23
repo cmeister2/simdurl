@@ -32,6 +32,7 @@ simdurl_detail_decode_blocks(const char **input, size_t *remaining,
   const char *string = *input;
   size_t alloc = *remaining;
   char *ns = *output;
+  const char *next_percent = string;
 
   while(alloc >= 32) {
     __m256i src;
@@ -48,7 +49,7 @@ simdurl_detail_decode_blocks(const char **input, size_t *remaining,
          !(simdurl_detail_special_mask(string + 64, form) |
            simdurl_detail_special_mask(string + 96, form))) {
         size_t n = 128 + simdurl_detail_literal_length(
-          string + 128, alloc - 128, form);
+          string + 128, alloc - 128, form, &next_percent);
         if(!simdurl_detail_literals_allowed(string, n, reject_limit))
           return 0;
         memmove(ns, string, n);
