@@ -49,8 +49,8 @@ submission order rather than the original commit dates.
 
 The harness comes from the workflow revision, while library headers and source come
 from the requested commit. This holds the workload constant during a backfill.
-Revisions before byte validation was introduced cannot build the complete
-current suite; do not interpret a missing benchmark as zero performance.
+Revisions before the ASCII lowercase and hex APIs were introduced cannot build
+the complete current suite; missing measurements never mean zero performance.
 
 ## Measurement contract
 
@@ -59,10 +59,11 @@ header-only benchmarks with `-std=c99 -O3 -DNDEBUG`, without `-march=native`.
 The scalar variants additionally define `SIMDURL_DISABLE_SIMD=1`; ordinary
 compiler vectorization remains enabled.
 
-The seven executables produce 516 series: the existing 72 codec and 264 byte
-validation series, plus 180 form-scanning series. Codec and validation use
-automatic and scalar header-only builds. Form scanning additionally measures
-a separately compiled library, linked without LTO. Every case has five samples.
+The ten executables produce 1,356 series: 72 codec, 264 byte validation,
+180 form-scanning, and 840 ASCII lowercase/hex helper series. Codec and validation
+use automatic and scalar header-only builds. Form scanning and helpers also
+measure a separately compiled library, linked without LTO. Every case has five
+samples.
 Bencher stores median
 **CPU-time nanoseconds per operation**, with observed minimum and maximum as
 bounds; these bounds are not confidence intervals. Codec elapsed time is
@@ -81,7 +82,27 @@ Form scanning defaults to 100,000 iterations at 16/64 bytes, then scales to
 reports CPU nanoseconds per operation directly. Existing codec and validation
 workloads, iteration counts, and metric names are unchanged; adding these new
 series retains their existing testbed and comparison history. Form scanning
-runs after the original workloads, and harness metadata is version 2.
+runs after the original workloads.
+
+The `helpers/` series measure ASCII lowercase copy and exact in-place conversion,
+plus lowercase and uppercase hex encoding. The full suite contains 140 workloads:
+runtime lengths from 0 to 4,096 bytes, including 15/16/17, 31/32/33, and 63/64/65
+boundaries, plus fixed-size hex calls at 16, 20, 32, and 64 bytes. Each workload
+has an independent optimized C comparator and a `simdurl` implementation, across
+`automatic`, `scalar`, and `compiled` builds: 140 × 2 × 3 = 840 series.
+Filter by `helpers/` and operation/build when comparing their histories.
+
+Helper samples default to 500,000 iterations, alternating comparator/library
+order across five samples. Fixed-size wrappers expose the same constant length
+and case to both sides. The `ascii_inplace_already_lowered` cases start with
+already-lowercased data; input-reset copying is outside timing. Timings include
+wrapper calls and checksum sampling. The C comparator assumes valid arguments
+and permits compiler vectorization; the public API performs its usual checks.
+The compiled build preserves a separate API call without LTO.
+
+Helpers run after the existing families. Harness metadata is version 3; existing
+series retain their names, workloads, iteration counts, and testbed. Appending
+new helper series therefore preserves the earlier comparison history.
 
 The exporter rejects incomplete output, duplicate cases, nonpositive or
 nonfinite timing, failed subprocesses, and inconsistent checksums. Its case
@@ -94,7 +115,8 @@ is unchanged.
 
 Bencher's published `intel-v1` specification does not guarantee VBMI2.
 Each job captures CPU features and the library's available encode/decode/validate
-backends for full SIMD blocks. Short inputs can still use portable tails.
+and helper backends for full SIMD blocks. Helper AVX2 dispatch starts at 64 bytes;
+shorter inputs can use SSE2 or portable tails.
 The initial hosted run exposed AVX2 encoding/validation and the portable
 decoder, without VBMI2. Tracking the VBMI2 path requires a different capable
 testbed. Hardware changes require a separate testbed or baseline.
@@ -142,9 +164,10 @@ python3 scripts/benchmark.py --bin-dir build-bencher/benchmarks \
 
 The output directory must be empty. The command emits Bencher Metric Format
 JSON on stdout and saves the same metrics, raw output, metadata, and samples in
-the directory. Optional `--codec-iterations`, `--codec-repeats`, and
-`--validation-iterations` and `--formscan-iterations` arguments support smoke
-checks. Very small iteration counts may round to zero and are rejected.
+the directory. Optional `--codec-iterations`, `--codec-repeats`,
+`--validation-iterations`, `--formscan-iterations`, and `--helper-iterations`
+arguments support smoke checks. Very small iteration counts may round to zero
+and are rejected.
 
 To exercise the exact container locally:
 

@@ -332,7 +332,9 @@ digests so constant-length optimization is measured as well as runtime lengths.
 In-place lowercase measurements use already-lowercased input, as labeled in the
 CSV; they do not include an input-reset copy. Timings include call and checksum
 costs, and the compiled variant includes its library call. Pass an iteration
-count to override the default 100000 per sample.
+count to override the default 100000 per sample. Bencher records all three
+variants, including the 63/64/65-byte dispatch boundary, using 500000 iterations
+per sample for helper measurements.
 
 The [historical benchmarking guide](docs/benchmarking.md) describes the Bencher
 workflow, per-commit results, manual backfills, and local verification.

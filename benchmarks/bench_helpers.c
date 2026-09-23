@@ -270,7 +270,7 @@ static int run_case(size_t length, unsigned int pattern,
 int main(int argc, char **argv)
 {
   static const size_t lengths[] = {
-    0, 1, 8, 15, 16, 17, 20, 31, 32, 33, 48, 64, 128, 512, 4096
+    0, 1, 8, 15, 16, 17, 20, 31, 32, 33, 48, 63, 64, 65, 128, 512, 4096
   };
   size_t iterations = 100000, length_index;
   unsigned int pattern, operation;
