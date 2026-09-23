@@ -11,12 +11,12 @@ The core suite uses automatic header-only dispatch in four executables. Scalar
 and separately compiled variants remain in the image for local full-suite
 diagnostics; every build comes from that same source commit. Historical
 comparison happens in Bencher under the source SHA and the separate
-`azure-d2s-v6-gcc15-v2` testbed. There is no new manually dispatched
+`azure-d2s-v6-gcc15-v1` testbed. There is no new manually dispatched
 workflow or paired-revision runner.
 
-The `v2` profile adds discarded warmup and 20 calibrated samples per case, with
-a 100 ms target and 50 ms minimum CPU duration for each accepted sample. It
-starts a separate measurement history from the five-sample `v1` profile. This
+Calibrated sampling adds discarded warmup and 20 samples per case, with a 100 ms
+target and 50 ms minimum CPU duration for each accepted sample. Measurements
+continue in the existing `v1` testbed; harness metadata records the policy. This
 sampling change has not been qualified on Azure yet; the next automatic `main`
 runs will provide that evidence without a separate allocation now.
 
@@ -479,7 +479,7 @@ same validation before allocating resources. No manual launch is needed for the 
 existing historical backfill facility remains available for recovering gaps.
 
 Publication reads saved `results.json` with Bencher's file adapter and records
-branch `main`, the exact source SHA, and testbed `azure-d2s-v6-gcc15-v2`. It runs
+branch `main`, the exact source SHA, and testbed `azure-d2s-v6-gcc15-v1`. It runs
 after cleanup. Rerunning only a failed publication job reuses the saved artifact
 and does not allocate another VM. An ambiguous Bencher submission can already
 have created a report; reconcile that report before retrying to avoid duplicates.

@@ -126,18 +126,19 @@ Harness metadata version 5 records the sampling policy, selected suite, and
 published benchmark count. Evidence retains each batch's actual iteration count
 and CPU duration, including discarded warmup and calibration batches, alongside
 the 20 accepted latency samples. Workloads, timer, compiler flags, and metric
-names are unchanged; the longer sampling method has its own testbed version.
+names are unchanged; the sampling policy identifies the change within the
+existing testbed history.
 
 The exporter rejects incomplete output, duplicate cases, nonpositive or
 nonfinite timing, failed subprocesses, and inconsistent repeated checksums.
 The selected case matrices must match the C filters.
 
-The hosted testbed is `intel-v1-gcc15-v2`. The calibrated GCC 15 profile has a
-separate history from the earlier five-sample `intel-v1-gcc15-v1` profile and
-GCC 14 measurements. Use a new version when changing the compiler, flags,
-measurement method, or workload semantics so incompatible
-measurements do not share a trend line. Keep case names stable when the workload
-is unchanged.
+The hosted testbed remains `intel-v1-gcc15-v1`, retaining the earlier five-sample
+results alongside calibrated measurements. Harness metadata records the sampling
+policy for each run. GCC 14 measurements retain their separate history. Use a
+new version when changing the compiler, flags, or workload semantics so
+incompatible measurements do not share a trend line. Keep case names stable when
+the workload is unchanged.
 
 Bencher's published `intel-v1` specification does not guarantee VBMI2.
 Each job captures CPU features and the library's available encode/decode/validate
@@ -145,8 +146,8 @@ and helper backends for full SIMD blocks. Helper AVX2 dispatch starts at 64 byte
 shorter inputs can use SSE2 or portable tails.
 The initial hosted run exposed AVX2 encoding/validation and the portable
 decoder, without VBMI2. The Azure lane requires native VBMI2 execution and uses
-`azure-d2s-v6-gcc15-v2`. The earlier five-sample history remains under
-`azure-d2s-v6-gcc15-v1`. Hardware changes require a separate testbed or baseline.
+the existing `azure-d2s-v6-gcc15-v1` testbed. Hardware changes require a separate
+testbed or baseline.
 
 ## Reading regressions and improvements
 
@@ -160,7 +161,7 @@ Longer samples and warmup reduce noise within one allocation; they do not remove
 differences in effective CPU frequency or contention between newly allocated
 VMs. Earlier Azure runs with identical benchmark binaries on the same CPU model
 moved together by roughly 10–20% across allocations. Review the next automatic
-`v2` reports before treating smaller changes as regressions. Repeating one
+calibrated reports before treating smaller changes as regressions. Repeating one
 unchanged commit across fresh allocations can characterize any remaining host
 variation; this is a separate qualification exercise, not part of every run.
 
@@ -250,7 +251,7 @@ the directory. Add `--suite full` with a fresh output directory for diagnostics.
 Use `--sampling fixed` with optional `--codec-iterations`, `--codec-repeats`,
 `--validation-iterations`, `--formscan-iterations`, and `--helper-iterations`
 arguments for short smoke checks. Fixed sampling is for functionality checks
-and diagnostics; do not publish it into the calibrated `v2` testbeds.
+and diagnostics; do not publish these reduced runs as performance measurements.
 Very small iteration counts may round to zero and are rejected.
 
 To exercise the exact container locally:

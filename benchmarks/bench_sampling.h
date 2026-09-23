@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <time.h>
 
-/* Changes to this policy require a new published measurement version. */
+/* Keep these constants in sync with the policy recorded by benchmark.py. */
 #define BENCH_SAMPLE_COUNT 20
 #define BENCH_WARMUP_NS UINT64_C(100000000)
 #define BENCH_TARGET_NS UINT64_C(100000000)
