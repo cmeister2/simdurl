@@ -23,9 +23,11 @@ import sys
 import time
 
 
-HARNESS_VERSION = 1
+HARNESS_VERSION = 2
 VALIDATION_REPEATS = 5
+FORMSCAN_REPEATS = 5
 BUILDS = ("automatic", "scalar")
+FORMSCAN_BUILDS = ("automatic", "scalar", "compiled")
 CODEC_CASES = {
     (operation, mode, pattern, str(length))
     for operation in ("encode", "decode")
@@ -40,6 +42,13 @@ VALIDATION_CASES = {
     for length in (0, 8, 16, 31, 32, 64, 128, 512, 4096)
     for variant in ("portable_C_branch", "simdurl")
     if length or pattern == "valid"
+}
+FORMSCAN_CASES = {
+    (mode, pattern, str(length))
+    for mode in ("URI", "form")
+    for pattern in ("literal", "plus_short", "plus_long", "percent_short", "percent_long", "mixed")
+    for length in (16, 64, 128, 512, 4096, 16384)
+    if length > 256 or pattern not in ("plus_long", "percent_long")
 }
 
 
@@ -141,6 +150,59 @@ def parse_validation(output, build, iterations):
     }, checksum(lines[-1], "# checksum: ")
 
 
+def parse_formscan(output, build, iterations):
+    lines = output.splitlines()
+    backend = {
+        "automatic": "# automatic CPU selection (header-only)",
+        "scalar": "# portable C/libc; compiler-generated and libc SIMD remain enabled",
+        "compiled": "# compiled library; configured backend selection applies",
+    }[build]
+    headers = [
+        backend,
+        "# fixed mode/noinline wrappers; disjoint buffers; CPU ns/operation",
+        "# long runs contain 256 literal bytes; short runs contain one",
+        "# iterations decrease with input length; five samples after warmup",
+        "# input/output barriers, status checks and output sampling are included",
+        "mode,pattern,bytes,iterations,sample,ns_per_op,ns_per_byte",
+    ]
+    if len(lines) < 7 or lines[:6] != headers:
+        raise BenchmarkError("Unexpected formscan header or build")
+    result = {}
+    seen = set()
+    try:
+        for fields in csv.reader(io.StringIO("\n".join(lines[6:-1])), strict=True):
+            if len(fields) != 7:
+                raise BenchmarkError(f"Malformed formscan row: {fields!r}")
+            case = tuple(fields[:3])
+            sample = fields[4]
+            if (case not in FORMSCAN_CASES
+                    or sample not in {str(i) for i in range(1, FORMSCAN_REPEATS + 1)}
+                    or (case, sample) in seen):
+                raise BenchmarkError(f"Unexpected or duplicate formscan sample: {fields[:5]!r}")
+            mode, pattern, length = case
+            expected_iterations = max(1, iterations // ((int(length) + 63) // 64))
+            if fields[3] != str(expected_iterations):
+                raise BenchmarkError(f"Unexpected formscan iteration count: {fields[:4]!r}")
+            ns_per_op = positive_number(fields[5], "formscan ns/op")
+            ns_per_byte = positive_number(fields[6], "formscan ns/byte")
+            # The C benchmark prints ns/op to three decimals and ns/byte to six.
+            tolerance = 0.0005 / int(length) + 0.0000005
+            if not math.isclose(ns_per_byte, ns_per_op / int(length), rel_tol=1e-12, abs_tol=tolerance):
+                raise BenchmarkError(f"Inconsistent formscan ns/op and ns/byte: {fields!r}")
+            seen.add((case, sample))
+            name = f"formscan/{mode}/{pattern}/{length}/simdurl/{build}"
+            result.setdefault(name, {})[int(sample)] = ns_per_op
+    except csv.Error as error:
+        raise BenchmarkError(f"Malformed formscan CSV: {error}") from error
+    expected_samples = len(FORMSCAN_CASES) * FORMSCAN_REPEATS
+    if len(seen) != expected_samples:
+        raise BenchmarkError(f"Incomplete formscan output: {len(seen)}/{expected_samples} samples")
+    return {
+        name: [samples[i] for i in range(1, FORMSCAN_REPEATS + 1)]
+        for name, samples in result.items()
+    }, checksum(lines[-1], "# checksum: ")
+
+
 def bmf(samples):
     """The displayed bounds are the observed range, not confidence intervals."""
     return {
@@ -229,10 +291,13 @@ def run(args):
         "codec_repeats": args.codec_repeats,
         "validation_iterations": args.validation_iterations,
         "validation_repeats": VALIDATION_REPEATS,
+        "formscan_iterations": args.formscan_iterations,
+        "formscan_repeats": FORMSCAN_REPEATS,
+        "formscan_iteration_scaling": "max(1, base_iterations // ceil(length / 64))",
         "timer": "process CPU time (C clock)",
         "measure": "latency (nanoseconds per operation)",
         "summary": "median with observed minimum and maximum",
-        "backend_selection": "automatic build uses CPU selection; scalar disables explicit SIMD only",
+        "backend_selection": "automatic build uses CPU selection; scalar disables explicit SIMD only; compiled uses configured library backend selection",
         "executables": {},
         "runs": [],
         "status": "running",
@@ -241,14 +306,19 @@ def run(args):
     checksums = {}
     try:
         # Alternate builds between process repeats to reduce order bias.
-        for family in ("codec", "validate"):
-            repeats = args.codec_repeats if family == "codec" else 1
-            iterations = args.codec_iterations if family == "codec" else args.validation_iterations
-            parse = parse_codec if family == "codec" else parse_validation
+        for family, repeats, iterations, parse, suffix in (
+            ("codec", args.codec_repeats, args.codec_iterations, parse_codec, ""),
+            ("validate", 1, args.validation_iterations, parse_validation, "_validate"),
+            ("formscan", 1, args.formscan_iterations, parse_formscan, "_formscan"),
+        ):
+            builds = FORMSCAN_BUILDS if family == "formscan" else BUILDS
             for repeat in range(repeats):
-                for build in BUILDS[::1 if repeat % 2 == 0 else -1]:
-                    executable_name = "simdurl_bench" + ("_validate" if family == "validate" else "")
-                    executable_name += "_scalar" if build == "scalar" else ""
+                for build in builds[::1 if repeat % 2 == 0 else -1]:
+                    executable_name = "simdurl_bench" + suffix
+                    if build == "scalar":
+                        executable_name += "_portable" if family == "formscan" else "_scalar"
+                    elif build == "compiled":
+                        executable_name += "_compiled"
                     executable = (args.bin_dir / executable_name).resolve()
                     if executable_name not in metadata["executables"]:
                         metadata["executables"][executable_name] = {
@@ -295,6 +365,8 @@ def main(argv=None):
     parser.add_argument("--codec-iterations", type=positive_int, default=100000)
     parser.add_argument("--codec-repeats", type=positive_int, default=5)
     parser.add_argument("--validation-iterations", type=positive_int, default=100000)
+    parser.add_argument("--formscan-iterations", type=positive_int, default=100000,
+                        help="base iterations per formscan sample, scaled down above 64 bytes")
     parser.add_argument("--timeout", type=positive_int, default=120, help="timeout in seconds per executable invocation")
     parser.add_argument("--commit", help="source commit SHA to record in metadata")
     args = parser.parse_args(argv)
