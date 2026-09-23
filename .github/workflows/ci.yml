@@ -1,0 +1,133 @@
+name: CI and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux GCC portable
+            os: ubuntu-24.04
+            cc: gcc
+            cxx: g++
+            options: ''
+          - name: Linux Clang shared
+            os: ubuntu-24.04
+            cc: clang
+            cxx: clang++
+            options: -DBUILD_SHARED_LIBS=ON
+          - name: Linux GCC native and IPO
+            os: ubuntu-24.04
+            cc: gcc
+            cxx: g++
+            options: -DSIMDURL_NATIVE=ON -DSIMDURL_ENABLE_IPO=ON
+          - name: Linux Clang scalar
+            os: ubuntu-24.04
+            cc: clang
+            cxx: clang++
+            options: -DSIMDURL_DISABLE_SIMD=ON
+          - name: macOS ARM64
+            os: macos-15
+            cc: clang
+            cxx: clang++
+            options: -DBUILD_SHARED_LIBS=ON
+          - name: Windows MSVC static
+            os: windows-2022
+            cc: cl
+            cxx: cl
+            options: ''
+          - name: Windows MSVC shared
+            os: windows-2022
+            cc: cl
+            cxx: cl
+            options: -DBUILD_SHARED_LIBS=ON
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSIMDURL_BUILD_TESTS=ON -DSIMDURL_BUILD_BENCHMARKS=ON ${{ matrix.options }}
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test and verify relocated CMake install
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  sanitizers:
+    name: Address and undefined behavior sanitizers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Configure
+        env:
+          CC: clang
+          CXX: clang++
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSIMDURL_BUILD_TESTS=ON
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+      - run: cmake --build build --parallel
+      # Install consumers link the intentionally instrumented archive only in the
+      # normal build matrix; this job exercises library and header-only tests.
+      - run: ctest --test-dir build --output-on-failure -E install_consumer
+
+  source-package:
+    name: Verify release source package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Build and prepare source archive without publishing
+        run: npm run release:prepare -- 0.0.0
+      - name: Build and test the unpacked archive
+        run: |
+          cd dist
+          sha256sum --check SHA256SUMS
+          tar -xzf simdurl-0.0.0.tar.gz
+          cmake -S simdurl-0.0.0 -B package-build -DCMAKE_BUILD_TYPE=Release -DSIMDURL_BUILD_TESTS=ON
+          cmake --build package-build --parallel
+          ctest --test-dir package-build --output-on-failure
+
+  release:
+    name: Semantic release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, sanitizers, source-package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Tag and publish release
+        run: npm run release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

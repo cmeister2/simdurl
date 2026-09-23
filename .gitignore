@@ -1,0 +1,7 @@
+/build*/
+/dist/
+/node_modules/
+/install/
+CMakeUserPresets.json
+*.user
+.DS_Store

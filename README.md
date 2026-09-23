@@ -186,9 +186,23 @@ matrix, sanitizers, and source archive checks before releasing.
 
 `fix:` commits cause patch releases, `feat:` commits cause minor releases, and
 breaking changes (`!` or a `BREAKING CHANGE:` footer) cause major releases.
-semantic-release makes the initial release `1.0.0`; the project version in
-`CMakeLists.txt` is `0.0.0` until then. Use an initial `feat:` commit to trigger
-the first release.
+The first published release is `0.1.0`. A `0.0.0` bootstrap tag on the initial
+README commit gives semantic-release its starting point; without an existing
+version tag, it defaults to `1.0.0`. The project version in `CMakeLists.txt`
+remains `0.0.0` until release preparation.
+
+Push the bootstrap tag before pushing the library's initial `feat:` commit to
+`main`:
+
+```sh
+git push origin 0.0.0
+git push origin main
+```
+
+The bootstrap tag is only a version baseline, with no release assets. The
+initial feature commit must follow that tag and contain no breaking-change
+marker so semantic-release selects `0.1.0`. Subsequent releases use the normal
+rules above; breaking changes still advance to `1.0.0` during `0.x` development.
 
 Release preparation updates the project version in `CMakeLists.txt`, rebuilds
 and tests, and creates `simdurl-<version>.tar.gz` plus `SHA256SUMS`. A release

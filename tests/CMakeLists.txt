@@ -1,0 +1,51 @@
+function(simdurl_add_test target library)
+  add_executable(${target} test_simdurl.c)
+  target_link_libraries(${target} PRIVATE ${library})
+  set_target_properties(${target} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+  if(UNIX)
+    target_compile_definitions(${target} PRIVATE SIMDURL_TEST_POSIX=1)
+  endif()
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ${target} COMMAND ${target})
+endfunction()
+
+simdurl_add_test(simdurl_test simdurl::simdurl)
+simdurl_add_test(simdurl_test_header_only simdurl::header_only)
+simdurl_add_test(simdurl_test_scalar simdurl::header_only)
+target_compile_definitions(simdurl_test_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
+
+add_executable(simdurl_test_backends test_backends.c)
+target_link_libraries(simdurl_test_backends PRIVATE simdurl::header_only)
+set_target_properties(simdurl_test_backends PROPERTIES
+  C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+if(MSVC)
+  target_compile_options(simdurl_test_backends PRIVATE /W4)
+else()
+  target_compile_options(simdurl_test_backends PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME simdurl_test_backends COMMAND simdurl_test_backends)
+
+foreach(mode IN ITEMS library header_only)
+  add_executable(simdurl_test_cpp_${mode} cpp_main.cpp cpp_other.cpp)
+  set_target_properties(simdurl_test_cpp_${mode} PROPERTIES
+    CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+  if(mode STREQUAL "library")
+    target_link_libraries(simdurl_test_cpp_${mode} PRIVATE simdurl::simdurl)
+  else()
+    target_link_libraries(simdurl_test_cpp_${mode} PRIVATE simdurl::header_only)
+  endif()
+  add_test(NAME simdurl_test_cpp_${mode} COMMAND simdurl_test_cpp_${mode})
+endforeach()
+
+if(WIN32 AND BUILD_SHARED_LIBS)
+  foreach(target IN ITEMS simdurl_test simdurl_test_cpp_library)
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:simdurl> $<TARGET_FILE_DIR:${target}>
+      VERBATIM)
+  endforeach()
+endif()
