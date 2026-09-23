@@ -60,12 +60,38 @@ SIMDURL_DETAIL_INLINE int simdurl_detail_unreserved(unsigned char c,
 
 SIMDURL_DETAIL_INLINE unsigned int simdurl_detail_hex(unsigned char c)
 {
+#if !defined(SIMDURL_DETAIL_X86)
+  /* A lookup speeds up percent-heavy portable-only decoding. Keep the
+   * arithmetic classifier in runtime-dispatch builds, where the lookup
+   * regressed form scanning. Invalid bytes map to 16 so (high | low) < 16
+   * still validates both digits. */
+  static const unsigned char values[256] = {
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+     0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 16, 16, 16, 16, 16, 16,
+    16, 10, 11, 12, 13, 14, 15, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 10, 11, 12, 13, 14, 15, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16
+  };
+  return values[c];
+#else
   if(c >= '0' && c <= '9')
     return (unsigned int)(c - '0');
   c = (unsigned char)(c | 32);
   if(c >= 'a' && c <= 'f')
     return (unsigned int)(c - 'a' + 10);
   return 256;
+#endif
 }
 
 /* Initialize *next_percent to the span start, then reuse it only while
