@@ -1,5 +1,10 @@
 function(simdurl_add_test target library)
-  add_executable(${target} test_simdurl.c)
+  if(ARGC GREATER 2)
+    set(test_source ${ARGV2})
+  else()
+    set(test_source test_simdurl.c)
+  endif()
+  add_executable(${target} ${test_source})
   target_link_libraries(${target} PRIVATE ${library})
   set_target_properties(${target} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
   if(UNIX)
@@ -17,6 +22,11 @@ simdurl_add_test(simdurl_test simdurl::simdurl)
 simdurl_add_test(simdurl_test_header_only simdurl::header_only)
 simdurl_add_test(simdurl_test_scalar simdurl::header_only)
 target_compile_definitions(simdurl_test_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
+
+simdurl_add_test(simdurl_test_scanner simdurl::simdurl test_scanner.c)
+simdurl_add_test(simdurl_test_scanner_header_only simdurl::header_only test_scanner.c)
+simdurl_add_test(simdurl_test_scanner_scalar simdurl::header_only test_scanner.c)
+target_compile_definitions(simdurl_test_scanner_scalar PRIVATE SIMDURL_DISABLE_SIMD=1)
 
 add_executable(simdurl_test_backends test_backends.c)
 target_link_libraries(simdurl_test_backends PRIVATE simdurl::header_only)
@@ -42,7 +52,7 @@ foreach(mode IN ITEMS library header_only)
 endforeach()
 
 if((WIN32 OR CYGWIN) AND BUILD_SHARED_LIBS)
-  foreach(target IN ITEMS simdurl_test simdurl_test_cpp_library)
+  foreach(target IN ITEMS simdurl_test simdurl_test_scanner simdurl_test_cpp_library)
     add_custom_command(TARGET ${target} POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:simdurl> $<TARGET_FILE_DIR:${target}>

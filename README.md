@@ -1,7 +1,7 @@
 # simdurl
 
-Allocation-free URL component encoding and decoding in C99, with a C++ compatible
-API.
+Allocation-free URL component encoding, decoding, and byte validation in C99,
+with a C++ compatible API.
 
 The library accepts byte spans and writes into caller-owned buffers. It supports
 URI components and `application/x-www-form-urlencoded` components, arbitrary
@@ -48,6 +48,34 @@ Encoding emits uppercase hex. Decoding accepts either hex case, leaves malformed
 or incomplete escapes unchanged, and decodes only once: `%2520` becomes `%20`.
 In form mode `%2B` becomes `+`, not space.
 
+## Check raw bytes
+
+`simdurl_validate_bytes(input, length, checks)` scans a bounded byte span without
+modifying it. Select any combination of these checks:
+
+| Check | Forbidden bytes |
+| --- | --- |
+| `SIMDURL_CHECK_C0` | `0x00` through `0x1F`, including NUL |
+| `SIMDURL_CHECK_DEL` | `0x7F` |
+| `SIMDURL_CHECK_SPACE` | `0x20` |
+
+```c
+const char input[] = "https://example.com/a%20b";
+simdurl_status status = simdurl_validate_bytes(
+  input, sizeof(input) - 1,
+  SIMDURL_CHECK_C0 | SIMDURL_CHECK_DEL | SIMDURL_CHECK_SPACE);
+/* SIMDURL_OK: %20 consists of three allowed bytes. */
+```
+
+The result is `SIMDURL_OK` or `SIMDURL_REJECTED`. Unknown check bits, or NULL with
+a nonzero length, return `SIMDURL_INVALID_ARGUMENT`. Empty input is accepted;
+zero checks accept without reading input after validating arguments.
+
+This scans raw bytes: it does not decode escapes, convert `+`, or stop at an
+embedded NUL. Bytes `0x80` through `0xFF` are always allowed. It checks neither
+URL syntax nor text encoding. The check constants are separate from the codec
+flags; in particular, DEL rejection is explicit.
+
 ## Build and install
 
 Requires CMake 3.20 or newer and a C99 compiler. Tests additionally require C++11.
@@ -88,20 +116,24 @@ includes elsewhere. Do not combine both macros in one translation unit.
 
 Header-only mode exposes the implementation to the optimizer, including constant
 flags and lengths. URL and form loops are specialized before iteration, keeping
-form handling out of the URL loop. Short inputs go straight to scalar code.
+form handling out of the URL loop. Short inputs use portable C tails.
 There are no heap allocations, mutable dispatch tables, or initialization calls.
 
 By default, x86 builds select SIMD at runtime and remain usable on older CPUs:
 
-| Compiler / CPU | Encoding | Decoding |
-| --- | --- | --- |
-| GCC 9+ or Clang 10+, x86-64 with AVX-512 VBMI2/BW/VL, AVX2, POPCNT | Parallel hex expansion and byte compression | Parallel substitution and byte compression |
-| Same compilers, x86-64 with AVX2 only | SIMD literal blocks, scalar escapes | Scalar |
-| Other CPUs and compilers, including MSVC and clang-cl | Scalar | Scalar |
+| Compiler / CPU | Encoding | Decoding | Byte validation |
+| --- | --- | --- | --- |
+| GCC 9+ or Clang 10+, x86-64 with AVX-512 VBMI2/BW/VL, AVX2, POPCNT | Parallel hex expansion and byte compression | Parallel substitution and byte compression | AVX2 |
+| Same compilers, x86-64 with AVX2 only | SIMD literal blocks, scalar escapes | Portable C | AVX2 |
+| Same compilers, other x86-64 CPUs | Portable C | Portable C | SSE2 |
+| Other CPUs and compilers, including MSVC and clang-cl | Portable C | Portable C | Portable C |
 
 The compiler versions above control whether SIMD implementations are compiled.
 CI checks current GCC, Clang, Apple Clang, and MSVC. No special alignment is
-required.
+required. The byte scanner uses explicit SIMD for 32-byte AVX2 or 16-byte SSE2
+blocks, with bounded portable C tails. Its portable implementation uses 32-byte
+reductions that the compiler may vectorize. Each path checks a block before
+advancing, allowing early rejection without scanning the rest of the input.
 
 For a known deployment CPU, compile header-only callers with suitable target
 flags (for example, `-march=native` on GCC/Clang x86-64). When all required
@@ -114,8 +146,10 @@ For a compiled static library, `-DSIMDURL_ENABLE_IPO=ON` enables interprocedural
 optimization. Enable IPO on the consuming application too, with a compatible
 compiler and linker, for optimization across the library boundary. IPO is
 optional because compiler-specific LTO objects are not always suitable for
-redistribution. `-DSIMDURL_DISABLE_SIMD=ON` forces scalar code; manual/header-only
-users can define `SIMDURL_DISABLE_SIMD` before inclusion.
+redistribution. `-DSIMDURL_DISABLE_SIMD=ON` disables explicit SIMD backends;
+manual/header-only users can define `SIMDURL_DISABLE_SIMD` before inclusion.
+Compiler-generated SIMD and optimized C library routines remain permitted in
+the portable paths.
 
 `simdurl_encode_bound(n)` returns `3*n`, or `SIZE_MAX` on overflow. Decoding needs
 at most `n` output bytes. Providing those worst-case capacities enables SIMD
@@ -125,8 +159,9 @@ accessing input.
 
 ## API contract
 
-Both operations take `(input, input_length, output, output_capacity, flags)` and
-return `simdurl_result { status, written }`.
+Encoding and decoding take `(input, input_length, output, output_capacity, flags)`
+and return `simdurl_result { status, written }`. Byte validation returns a status
+directly, as described above.
 
 | Status | Meaning |
 | --- | --- |
@@ -151,11 +186,13 @@ Encoding accepts only `SIMDURL_URI` or `SIMDURL_FORM`.
 
 ## Validation
 
-CTest exercises the compiled library, header-only and forced-scalar variants,
+CTest exercises the compiled library, header-only and forced-portable variants,
 C++ translation units, exhaustive byte/hex cases, randomized reference checks,
 unaligned and in-place buffers, bounds checks, and protected-page boundaries on
-supported Unix systems. It also installs to a temporary prefix, relocates that
-prefix, and builds separate consumers of both CMake targets.
+supported Unix systems. Scanner tests cover all 256 bytes and all eight check
+combinations, every vector lane, direct backend calls, exact allocations, and
+read-only guarded pages on Unix and Windows. Tests also install to a temporary
+prefix, relocate that prefix, and build separate consumers of both CMake targets.
 
 CI covers Linux GCC/Clang, macOS ARM64, and Windows MSVC, MSYS2, and Cygwin,
 including native 32-bit Windows builds. It checks static/shared libraries,
@@ -165,7 +202,7 @@ length, escape density, and compiler settings; measure on your deployment
 workload.
 
 Optional benchmarks compare the same header-only workload with runtime SIMD
-selection and with SIMD disabled:
+selection and with explicit SIMD disabled:
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSIMDURL_BUILD_BENCHMARKS=ON
@@ -178,6 +215,21 @@ Pass an iteration count, such as `100`, for a quick smoke run. Each executable
 covers URI/form encoding/decoding, lengths 16/128/4096, and literal, mixed, and
 dense escape patterns. Matching checksums help verify equivalent output. Throughput
 is measured in input bytes per second.
+
+The byte scanner has a separate benchmark against an independent portable C
+branch loop, with ordinary compiler optimization enabled for both:
+
+```sh
+./build/benchmarks/simdurl_bench_validate
+./build/benchmarks/simdurl_bench_validate_scalar
+```
+
+It covers lengths from 0 to 4096 bytes, valid and high-byte inputs, and early/late
+rejection for control/DEL checks with and without space rejection. CSV output
+reports five samples in nanoseconds per call; early exits do not process the
+whole buffer. An optional argument sets iterations per sample (default 100000).
+The `_scalar` target disables explicit SIMD, while compiler vectorization remains
+permitted. Measurements use header-only calls with constant check flags.
 
 ## Releases
 
