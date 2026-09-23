@@ -60,8 +60,8 @@ ctest --test-dir build-extended --output-on-failure
 
 Direct tests emit `backend` records identifying compiled, executed, and skipped
 implementations. Retain verbose CTest logs to retain these successful records.
-An unsupported CPU path is a skip, not execution evidence. On a designated
-machine, require a backend explicitly:
+An unsupported CPU path is a skip, not execution evidence. On a CPU that supports it,
+require a backend explicitly:
 
 ```sh
 cmake -S . -B build-required -DCMAKE_BUILD_TYPE=Release -DSIMDURL_TEST_REQUIRE_BACKEND=vbmi2
@@ -72,10 +72,7 @@ ctest --test-dir build-required --verbose
 Accepted requirements are `portable`, `sse2`, `avx2`, and `vbmi2`. Portable
 applies to all operations; SSE2 to scanning; AVX2 to encoding/scanning; and
 VBMI2 to encoding/decoding. A required but uncompiled/unsupported backend
-fails the test. No requirement bypasses CPU feature checks. The optional CI
-job is requested with `workflow_dispatch`, `require_vbmi2=true`, on `main`; it
-requires a runner labeled `self-hosted`, `linux`, `x64`, and `simdurl-vbmi2`.
-A requested job that fails or does not run fails the workflow. Runtime-dispatched
+fails the test. No requirement bypasses CPU feature checks. Runtime-dispatched
 public calls are tested separately by the main suites. Run a baseline binary on
 an older x86-64 CPU to validate the public fallback on that hardware; compiling
 with SIMD disabled is additional coverage, not equivalent dispatch evidence.
@@ -153,9 +150,11 @@ Direct kernel tests cover those kernels but cannot demonstrate dispatch on a
 CPU lacking the features. Keep these exclusions attached to the report and
 obtain the complementary run on the appropriate CPU; do not suppress the
 branches merely to improve the percentage.
-An ordinary hosted job may not execute VBMI2. Use the designated runner workflow
-and retain its execution record before claiming validation of that backend for
-a release. Historical logs from a different revision are not sufficient.
+Hosted CI tests each backend supported by its runner, including VBMI2 when
+available, and retains execution records. CPU availability can vary between
+runs, so check those records before claiming validation of a backend for a
+release. A skipped backend needs a run on a CPU that supports it to establish
+coverage; historical logs from a different revision are not sufficient.
 
 PR jobs run deterministic tests, sanitizer checks, and corpus replay plus
 10-second fuzz campaigns per operation/mode. The Monday 03:23 UTC schedule runs

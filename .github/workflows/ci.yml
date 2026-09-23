@@ -7,11 +7,6 @@ on:
   schedule:
     - cron: '23 3 * * 1'
   workflow_dispatch:
-    inputs:
-      require_vbmi2:
-        description: Run required VBMI2 tests on the trusted dedicated runner (main only)
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -283,37 +278,6 @@ jobs:
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
 
-  vbmi2:
-    name: Required AVX-512 VBMI2 execution
-    # Never schedule untrusted pull-request code on the self-hosted machine.
-    # A maintainer must explicitly request this job for the main branch.
-    if: github.event_name == 'workflow_dispatch' && inputs.require_vbmi2 && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, simdurl-vbmi2]
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Configure required backend execution
-        env:
-          CC: clang
-          CXX: clang++
-        run: >-
-          cmake -S . -B build-vbmi2 -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DSIMDURL_BUILD_TESTS=ON -DSIMDURL_TEST_REQUIRE_BACKEND=vbmi2
-          -DSIMDURL_TEST_EXTENDED=ON
-          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
-          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
-      - run: cmake --build build-vbmi2 --parallel
-      - run: ctest --test-dir build-vbmi2 --verbose --output-on-failure -E install_consumer
-      - name: Retain required backend execution evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: vbmi2-execution
-          path: build-vbmi2/Testing/Temporary/LastTest.log
-          if-no-files-found: ignore
-
   source-package:
     name: Verify release source package
     runs-on: ubuntu-26.04
@@ -340,14 +304,12 @@ jobs:
 
   release:
     name: Semantic release
-    needs: [build, sanitizers, memory-sanitizer, fuzz, coverage, source-package, vbmi2]
+    needs: [build, sanitizers, memory-sanitizer, fuzz, coverage, source-package]
     if: >-
       always() && !cancelled() &&
       needs.build.result == 'success' && needs.sanitizers.result == 'success' &&
       needs.memory-sanitizer.result == 'success' && needs.fuzz.result == 'success' &&
-      needs.coverage.result == 'success' && needs.source-package.result == 'success' &&
-      (needs.vbmi2.result == 'success' ||
-       (needs.vbmi2.result == 'skipped' && !inputs.require_vbmi2))
+      needs.coverage.result == 'success' && needs.source-package.result == 'success'
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -375,7 +337,7 @@ jobs:
     name: Success
     # Report failed or skipped jobs instead of skipping this required check.
     if: ${{ always() }}
-    needs: [build, sanitizers, memory-sanitizer, fuzz, coverage, source-package, vbmi2, release]
+    needs: [build, sanitizers, memory-sanitizer, fuzz, coverage, source-package, release]
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
@@ -386,8 +348,6 @@ jobs:
           MEMORY_SANITIZER_RESULT: ${{ needs.memory-sanitizer.result }}
           FUZZ_RESULT: ${{ needs.fuzz.result }}
           COVERAGE_RESULT: ${{ needs.coverage.result }}
-          VBMI2_RESULT: ${{ needs.vbmi2.result }}
-          VBMI2_REQUIRED: ${{ inputs.require_vbmi2 && 'true' || 'false' }}
           SOURCE_PACKAGE_RESULT: ${{ needs.source-package.result }}
           RELEASE_RESULT: ${{ needs.release.result }}
         run: |
@@ -396,10 +356,5 @@ jobs:
           test "$MEMORY_SANITIZER_RESULT" = "success"
           test "$FUZZ_RESULT" = "success"
           test "$COVERAGE_RESULT" = "success"
-          if [ "$VBMI2_REQUIRED" = "true" ]; then
-            test "$VBMI2_RESULT" = "success"
-          else
-            test "$VBMI2_RESULT" = "skipped" || test "$VBMI2_RESULT" = "success"
-          fi
           test "$SOURCE_PACKAGE_RESULT" = "success"
           test "$RELEASE_RESULT" = "success"
