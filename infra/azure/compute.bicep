@@ -3,7 +3,7 @@ targetScope = 'resourceGroup'
 param location string = resourceGroup().location
 
 // Fixed resources are deliberately excluded from every run manifest.
-resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
+resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-10-01' = {
   name: 'simdurl-bench-nsg'
   location: location
   properties: {
