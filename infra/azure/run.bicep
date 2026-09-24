@@ -26,7 +26,7 @@ resource network 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
   name: 'simdurl-bench-vnet'
 }
 
-resource publicIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
+resource publicIp 'Microsoft.Network/publicIPAddresses@2024-10-01' = {
   name: '${runId}-ip'
   location: location
   tags: tags
