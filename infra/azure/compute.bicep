@@ -25,7 +25,7 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-10-0
   }
 }
 
-resource network 'Microsoft.Network/virtualNetworks@2024-05-01' = {
+resource network 'Microsoft.Network/virtualNetworks@2024-10-01' = {
   name: 'simdurl-bench-vnet'
   location: location
   properties: {

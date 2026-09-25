@@ -22,7 +22,7 @@ var tags = {
   'simdurl-expires-at': expiresAt
 }
 
-resource network 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
+resource network 'Microsoft.Network/virtualNetworks@2024-10-01' existing = {
   name: 'simdurl-bench-vnet'
 }
 
