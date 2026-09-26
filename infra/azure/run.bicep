@@ -59,7 +59,7 @@ resource nic 'Microsoft.Network/networkInterfaces@2024-10-01' = {
   }
 }
 
-resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
+resource vm 'Microsoft.Compute/virtualMachines@2024-11-01' = {
   name: '${runId}-vm'
   location: location
   tags: tags
