@@ -26,7 +26,7 @@ RUN mkdir /out && \
     printf '%s\n' "$SOURCE_SHA" > /out/source-sha && \
     printf '%s\n' '-std=c99 -O3 -DNDEBUG; header-only: -DSIMDURL_HEADER_ONLY; scalar: -DSIMDURL_DISABLE_SIMD=1; compiled formscan/helpers: separate simdurl.c object and -DSIMDURL_BENCH_COMPILED=1 benchmark; no native tuning or LTO' > /out/compiler-flags
 
-FROM python:3.14.7-slim-bookworm@sha256:82bc3c539b8813ada9d68c63b40158fa002f7f33de9bf3312a3dfdc0620dff56
+FROM python:3.15.1-slim-bookworm@sha256:575f8bc12ec26542e0678bc6b60e385218248019d433157ec327264a78c3a853
 WORKDIR /opt/simdurl
 COPY --from=build /out/ benchmarks/
 COPY scripts/benchmark.py benchmarks/bencher/run.py ./
