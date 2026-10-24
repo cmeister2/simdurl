@@ -324,7 +324,20 @@ static void test_encoder(encode_backend backend, const char *name)
          "skipped=0 cases=%lu kernel_calls=%lu\n", name, cases, kernel_calls);
 }
 
-static void test_decoder(decode_backend backend, const char *name)
+#ifdef SIMDURL_DETAIL_X86
+/* Adapt the form-specialized entry to the shared differential test harness.
+ * Its caller restricts flags to form mode; rejection remains a separate input. */
+static int decode_form_vbmi2(const char **input, size_t *remaining, char **output,
+                             unsigned char reject_limit, unsigned int flags,
+                             int in_place)
+{
+  CHECK(flags & SIMDURL_FORM);
+  return simdurl_detail_decode_form_vbmi2(input, remaining, output,
+                                          reject_limit, in_place);
+}
+#endif
+
+static void test_decoder(decode_backend backend, const char *name, int form_only)
 {
   static const char *const tokens[] = {
     "%00", "%01", "%1f", "%20", "%2B", "%7F", "%80", "%fF", "%G0",
@@ -347,6 +360,8 @@ static void test_decoder(decode_backend backend, const char *name)
   cases = kernel_calls = 0;
 
   for(flags = 0; flags < 8; ++flags) {
+    if(form_only && !(flags & SIMDURL_FORM))
+      continue;
     context = "decode valid, malformed and truncated escapes in every lane";
     for(position = 0; position < 160; ++position) {
       for(token = 0; token < sizeof(tokens) / sizeof(tokens[0]); ++token) {
@@ -432,6 +447,8 @@ static void test_decoder(decode_backend backend, const char *name)
         input[position + 1] = (char)high;
         input[position + 2] = (char)low;
         for(flags = 0; flags <= 7; flags += 7) {
+          if(form_only && !(flags & SIMDURL_FORM))
+            continue;
           for(in_place = 0; in_place < 2; ++in_place)
             check_decode_case(backend, input, 96, flags, high % ALIGNMENTS,
                                 low % ALIGNMENTS, in_place);
@@ -447,7 +464,7 @@ static void test_decoder(decode_backend backend, const char *name)
  * SIMD codec preconditions require worst-case capacity, even if the exact
  * decoded/encoded result is shorter. */
 static void test_exact_allocations(encode_backend encode, decode_backend decode,
-                                   const char *name)
+                                   const char *name, int form_only)
 {
   size_t length, i, remaining;
   unsigned int flags;
@@ -466,6 +483,8 @@ static void test_exact_allocations(encode_backend encode, decode_backend decode,
       input[i] = pattern[i % (sizeof(pattern) - 1)];
     for(flags = 0; flags < 8; ++flags) {
       simdurl_result expected, result;
+      if(form_only && !(flags & SIMDURL_FORM))
+        continue;
       record_case(input, length, flags, 0, 0, 0);
       expected = reference_decode(input, length, reference, flags);
       result = direct_decode(decode, input, length, decoded, flags, 0);
@@ -533,21 +552,23 @@ int main(int argc, char **argv)
   avx2 = simdurl_detail_has_avx2();
   vbmi2 = simdurl_detail_has_vbmi2();
 #endif
-  test_exact_allocations(NULL, NULL, "portable");
+  test_exact_allocations(NULL, NULL, "portable", 0);
   test_encoder(NULL, "portable");
-  test_decoder(NULL, "portable");
+  test_decoder(NULL, "portable", 0);
 #ifdef SIMDURL_DETAIL_X86
   if(avx2) {
     available |= 2;
-    test_exact_allocations(simdurl_detail_encode_avx2, NULL, "avx2");
+    test_exact_allocations(simdurl_detail_encode_avx2, NULL, "avx2", 0);
     test_encoder(simdurl_detail_encode_avx2, "avx2");
   }
   if(vbmi2) {
     available |= 4;
     test_exact_allocations(simdurl_detail_encode_vbmi2,
-                             simdurl_detail_decode_vbmi2, "vbmi2");
+                             simdurl_detail_decode_vbmi2, "vbmi2", 0);
     test_encoder(simdurl_detail_encode_vbmi2, "vbmi2");
-    test_decoder(simdurl_detail_decode_vbmi2, "vbmi2");
+    test_decoder(simdurl_detail_decode_vbmi2, "vbmi2", 0);
+    test_exact_allocations(NULL, decode_form_vbmi2, "vbmi2_form", 1);
+    test_decoder(decode_form_vbmi2, "vbmi2_form", 1);
   }
 #endif
   if(!avx2)
@@ -555,6 +576,7 @@ int main(int argc, char **argv)
   if(!vbmi2) {
     report_skipped("encode", "vbmi2", compiled);
     report_skipped("decode", "vbmi2", compiled);
+    report_skipped("decode", "vbmi2_form", compiled);
   }
   if(required & ~available) {
     fprintf(stderr, "Required codec backend did not execute:");

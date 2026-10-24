@@ -232,8 +232,14 @@ SIMDURL_API simdurl_result simdurl_decode(const char *input, size_t input_length
 #ifdef SIMDURL_DETAIL_X86
   if(remaining >= 32 && output_capacity >= input_length &&
      simdurl_detail_has_vbmi2()) {
-    if(!simdurl_detail_decode_vbmi2(&input, &remaining, &next, reject_limit,
-                                   flags, input == output))
+    int decoded;
+    if((flags & SIMDURL_FORM) && remaining >= 256)
+      decoded = simdurl_detail_decode_form_vbmi2(&input, &remaining, &next,
+                                                reject_limit, input == output);
+    else
+      decoded = simdurl_detail_decode_vbmi2(&input, &remaining, &next,
+                                           reject_limit, flags, input == output);
+    if(!decoded)
       return simdurl_detail_result(SIMDURL_REJECTED, 0);
     written = (size_t)(next - output);
   }

@@ -322,6 +322,55 @@ static void test_cached_marker_decoding(void)
   }
 }
 
+/* Alternate bulk form copies with the percent path. A percent-decoded '+'
+ * must stay '+', including after a prefix has shifted an in-place destination
+ * behind the source. Raw high bytes and DEL remain valid under both rejection
+ * policies; raw/escaped NUL and C0 controls must still be rejected. */
+static void fill_bulk_transition(char *input, size_t length, size_t marker,
+                                 unsigned int token, int shrinking_prefix)
+{
+  static const char *const tokens[] = {
+    "%2B+", "%q0+%", "%00+", "%1f+", "\0+", "\x1f+"
+  };
+  static const size_t sizes[] = { 4, 5, 4, 4, 2, 2 };
+  size_t i;
+  for(i = 0; i < length; ++i)
+    input[i] = i % 31 == 30 ? '+' : i % 97 == 96 ? (char)255 :
+               i % 101 == 100 ? (char)127 : 'x';
+  if(shrinking_prefix)
+    memcpy(input, "%41%2B%20", 9);
+  CHECK(marker + sizes[token] <= length);
+  memcpy(input + marker, tokens[token], sizes[token]);
+}
+
+static void test_bulk_transitions(void)
+{
+  /* Include boundaries after an initial 32-byte percent block as well as
+   * boundaries reached by 256-byte groups and their 64-byte cleanup lanes. */
+  static const size_t markers[] = {
+    127, 128, 129, 159, 160, 161, 191, 192, 193, 223, 224, 225,
+    255, 256, 257, 287, 288, 289, 383, 384, 385, 415, 416, 417,
+    511, 512, 513, 543, 544, 545
+  };
+  static const size_t offsets[] = { 0, 1, 31, 63 };
+  char input[1024];
+  size_t marker, offset;
+  unsigned int token;
+  int shrinking_prefix;
+  context = "bulk form copies and percent transitions after contraction";
+  for(shrinking_prefix = 0; shrinking_prefix < 2; ++shrinking_prefix) {
+    for(marker = 0; marker < sizeof(markers) / sizeof(markers[0]); ++marker) {
+      size_t length = markers[marker] + 257;
+      for(token = 0; token < 6; ++token) {
+        fill_bulk_transition(input, length, markers[marker], token,
+                              shrinking_prefix);
+        for(offset = 0; offset < sizeof(offsets) / sizeof(offsets[0]); ++offset)
+          check_case(input, length, offsets[offset]);
+      }
+    }
+  }
+}
+
 static void test_exact_allocations(void)
 {
   size_t length;
@@ -449,6 +498,61 @@ static void set_page_access(char *page, size_t length, int writable)
 #endif
 }
 
+static void check_guarded_bulk_transitions(char *middle, size_t page_size)
+{
+  static const size_t markers[] = {
+    191, 192, 193, 223, 224, 225, 255, 256, 257,
+    287, 288, 289, 383, 384, 385
+  };
+  char original[513], expected[513], output[513 + 2 * SIMDURL_TEST_PADDING];
+  size_t side, marker;
+  unsigned int token, flags;
+  int shrinking_prefix;
+  context = "guarded bulk form copies and in-place percent transitions";
+  for(side = 0; side < 2; ++side) {
+    char *input = side ? middle + page_size - sizeof(original) : middle;
+    size_t offset = (size_t)(input - middle);
+    for(shrinking_prefix = 0; shrinking_prefix < 2; ++shrinking_prefix) {
+      for(marker = 0; marker < sizeof(markers) / sizeof(markers[0]); ++marker) {
+        for(token = 0; token < 6; ++token) {
+          fill_bulk_transition(original, sizeof(original), markers[marker],
+                                token, shrinking_prefix);
+          for(flags = 0; flags < 8; ++flags) {
+            simdurl_result actual, reference;
+            case_length = sizeof(original);
+            case_offset = offset;
+            case_flags = flags;
+            reference = reference_decode(original, sizeof(original), expected,
+                                           flags);
+            memset(middle, 0xa5, page_size);
+            memcpy(input, original, sizeof(original));
+            memset(output, 0xa5, sizeof(output));
+            set_page_access(middle, page_size, 0);
+            actual = simdurl_decode(input, sizeof(original),
+                                     output + SIMDURL_TEST_PADDING,
+                                     sizeof(original), flags);
+            CHECK(actual.status == reference.status &&
+                  actual.written == reference.written);
+            if(actual.status == SIMDURL_OK)
+              CHECK(memcmp(output + SIMDURL_TEST_PADDING, expected,
+                            actual.written) == 0);
+            check_canaries(output, SIMDURL_TEST_PADDING, sizeof(original),
+                             sizeof(output));
+            set_page_access(middle, page_size, 1);
+            actual = simdurl_decode(input, sizeof(original), input,
+                                     sizeof(original), flags);
+            CHECK(actual.status == reference.status &&
+                  actual.written == reference.written);
+            if(actual.status == SIMDURL_OK)
+              CHECK(memcmp(input, expected, actual.written) == 0);
+            check_canaries(middle, offset, sizeof(original), page_size);
+          }
+        }
+      }
+    }
+  }
+}
+
 static void test_guard_pages(void)
 {
   char *pages, *middle;
@@ -496,6 +600,7 @@ static void test_guard_pages(void)
       }
     }
   }
+  check_guarded_bulk_transitions(middle, page_size);
 #if defined(SIMDURL_TEST_POSIX)
   CHECK(munmap(pages, page_size * 3) == 0);
 #else
@@ -515,6 +620,7 @@ int main(void)
 #endif
   test_distributions();
   test_cached_marker_decoding();
+  test_bulk_transitions();
   test_exact_allocations();
 #if defined(SIMDURL_TEST_POSIX) || defined(_WIN32)
   test_guard_pages();
