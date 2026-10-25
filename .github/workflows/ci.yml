@@ -217,7 +217,7 @@ jobs:
 
   coverage:
     name: Implementation coverage
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       CC: clang-18
@@ -226,10 +226,11 @@ jobs:
       DEBUGINFOD_URLS: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install matching compiler and coverage tools
+      - name: Verify matching compiler and coverage tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 llvm-18
+          clang-18 --version
+          llvm-profdata-18 --version
+          llvm-cov-18 --version
       - name: Build coverage-instrumented C and C++ tests
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSIMDURL_BUILD_TESTS=ON \
