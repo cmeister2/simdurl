@@ -220,17 +220,17 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
-      CC: clang-18
-      CXX: clang++-18
+      CC: clang-20
+      CXX: clang++-20
       LLVM_PROFILE_FILE: ${{ github.workspace }}/build/profiles/%m-%p.profraw
       DEBUGINFOD_URLS: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Verify matching compiler and coverage tools
         run: |
-          clang-18 --version
-          llvm-profdata-18 --version
-          llvm-cov-18 --version
+          clang-20 --version
+          llvm-profdata-20 --version
+          llvm-cov-20 --version
       - name: Build coverage-instrumented C and C++ tests
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSIMDURL_BUILD_TESTS=ON \
@@ -243,7 +243,7 @@ jobs:
       - name: Report implementation branch and region coverage
         shell: bash
         run: |
-          llvm-profdata-18 merge -sparse build/profiles/*.profraw -o build/coverage/tests.profdata
+          llvm-profdata-20 merge -sparse build/profiles/*.profraw -o build/coverage/tests.profdata
           objects=(build/tests/simdurl_test)
           for executable in build/tests/simdurl_test*; do
             if [[ -f "$executable" && -x "$executable" && "$executable" != build/tests/simdurl_test ]]; then
@@ -251,12 +251,12 @@ jobs:
             fi
           done
           sources=(include/simdurl.h include/simdurl/detail/*.h)
-          llvm-cov-18 report "${objects[@]}" -instr-profile=build/coverage/tests.profdata \
+          llvm-cov-20 report "${objects[@]}" -instr-profile=build/coverage/tests.profdata \
             "${sources[@]}" | tee build/coverage/summary.txt
-          llvm-cov-18 show "${objects[@]}" -instr-profile=build/coverage/tests.profdata \
+          llvm-cov-20 show "${objects[@]}" -instr-profile=build/coverage/tests.profdata \
             -format=html -output-dir=build/coverage/html -show-branches=count \
             "${sources[@]}"
-          llvm-cov-18 export "${objects[@]}" -instr-profile=build/coverage/tests.profdata \
+          llvm-cov-20 export "${objects[@]}" -instr-profile=build/coverage/tests.profdata \
             "${sources[@]}" > build/coverage/coverage.json
       - name: Retain coverage and execution reports
         if: always()
