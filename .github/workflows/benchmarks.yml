@@ -76,7 +76,7 @@ jobs:
           path: source
           persist-credentials: false
       - name: Install Bencher
-        uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a # v0.6.13
+        uses: bencherdev/bencher@7de3c69a85380826613050826b4bce062be2f07d # v0.6.16
         with:
           version: 0.6.12
       - name: Prepare the benchmark build context
@@ -318,7 +318,7 @@ jobs:
       - name: Require complete measurements
         run: test -s evidence/results.json
       - name: Install Bencher
-        uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a # v0.6.13
+        uses: bencherdev/bencher@7de3c69a85380826613050826b4bce062be2f07d # v0.6.16
         with:
           version: 0.6.12
       - name: Publish this commit to the Azure testbed
